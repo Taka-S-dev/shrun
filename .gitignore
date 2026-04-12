@@ -1,0 +1,10 @@
+*
+!.gitignore
+!Program.cs
+!shrun.csproj
+!README.md
+!LICENSE
+!test_drive.bat
+!projects/
+!projects/default/
+!projects/default/config.json
