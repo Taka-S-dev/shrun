@@ -17,7 +17,7 @@ if (!Directory.Exists(projectsDir))
 
 // Find project subdirectories that contain config.json
 var projectDirs = Directory.GetDirectories(projectsDir)
-    .Where(d => File.Exists(Path.Combine(d, "config.json")))
+    .Where(d => File.Exists(Path.Combine(d, "config.json")) || File.Exists(Path.Combine(d, "config.tsv")))
     .OrderBy(d => d).ToList();
 
 if (projectDirs.Count == 0)
@@ -32,13 +32,23 @@ var projectDir = projectDirs.Count == 1
 
 if (projectDir == null) return;
 
-var (config, workflows, lastWorkflow, workflowsPath, lastPath) = LoadConfig(projectDir);
+var (config, workflows, lastWorkflow, workflowsPath, lastPath, aliases, aliasesPath) = LoadConfig(projectDir);
 if (config == null) return;
 
-var modes = new List<string> { "Run workflow", "Run manually", "Create workflow", "Edit workflow", "Delete workflow", "Switch config", "Exit" };
+var modes = new List<string> { "Run workflow", "Run manually", "Create workflow", "Edit workflow", "Delete workflow", "Manage aliases", "Switch config", "Exit" };
 
 while (true)
 {
+    // Reload config on each iteration so selection screens always show latest
+    {
+        var reloadJson = Path.Combine(projectDir, "config.json");
+        var reloadTsv  = Path.Combine(projectDir, "config.tsv");
+        var reloaded = File.Exists(reloadJson)
+            ? JsonSerializer.Deserialize<Config>(File.ReadAllText(reloadJson))
+            : File.Exists(reloadTsv) ? ParseTsv(reloadTsv) : null;
+        if (reloaded != null && reloaded.Commands.Count > 0) config = reloaded;
+    }
+
     var mode = SingleSelectStr("Mode", modes, isMain: true, subtitle: Path.GetFileName(projectDir));
     if (mode == null || mode == "Exit") return;
 
@@ -48,7 +58,7 @@ while (true)
         var newDir = SelectProjectDir(projectDirs);
         if (newDir == null) continue;
         projectDir = newDir;
-        (config, workflows, lastWorkflow, workflowsPath, lastPath) = LoadConfig(projectDir);
+        (config, workflows, lastWorkflow, workflowsPath, lastPath, aliases, aliasesPath) = LoadConfig(projectDir);
         if (config == null) return;
         continue;
     }
@@ -60,8 +70,7 @@ while (true)
         {
             Header("Delete workflow"); Console.WriteLine("  No workflows found."); Pause(); continue;
         }
-        var toDelete = MultiSelectGeneric("Delete workflow", workflows,
-            p => p.Name);
+        var toDelete = MultiSelectGeneric("Delete workflow", workflows, p => p.Name);
         if (toDelete.Count == 0) continue;
 
         foreach (var p in toDelete) workflows.Remove(p);
@@ -78,8 +87,7 @@ while (true)
         {
             Header("Edit workflow"); Console.WriteLine("  No workflows found."); Pause(); continue;
         }
-        var toEdit = SingleSelect("Edit workflow", workflows,
-            p => p.Name);
+        var toEdit = SingleSelect("Edit workflow", workflows, p => p.Name);
         if (toEdit == null) continue;
 
         var editModes = new List<string> { "Rename", "Change commands" };
@@ -112,8 +120,96 @@ while (true)
         Header("Edit workflow"); Console.WriteLine("  Saved."); Pause(); continue;
     }
 
+    // --- Manage aliases ---
+    if (mode == "Manage aliases")
+    {
+        var aliasModes = new List<string> { "Create alias", "Edit alias", "Delete alias" };
+        var aliasMode = SingleSelectStr("Manage aliases", aliasModes);
+        if (aliasMode == null) continue;
+
+        if (aliasMode == "Create alias")
+        {
+            var steps = MultiSelect("Select commands for alias", config.Commands);
+            if (steps.Count == 0) continue;
+
+            Header("Create alias");
+            Console.WriteLine("  Esc: cancel\n");
+            var name = ReadInput("  Alias name > ");
+            if (!string.IsNullOrEmpty(name))
+            {
+                var existing = aliases.FirstOrDefault(a => a.Name == name);
+                if (existing != null)
+                {
+                    Console.Write($"  \"{name}\" already exists. Overwrite? (y/n) > ");
+                    if (Console.ReadLine()?.Trim().ToLower() != "y") { Pause(); continue; }
+                    aliases.Remove(existing);
+                }
+                aliases.Add(new Alias(name, steps.Select(c => c.Name).ToList()));
+                SaveAliases(aliasesPath, aliases);
+                Console.WriteLine("  Saved.");
+                Pause();
+            }
+            continue;
+        }
+
+        if (aliasMode == "Edit alias")
+        {
+            if (aliases.Count == 0)
+            {
+                Header("Edit alias"); Console.WriteLine("  No aliases found."); Pause(); continue;
+            }
+            var toEditAlias = SingleSelect("Edit alias", aliases, a => a.Name);
+            if (toEditAlias == null) continue;
+
+            var editAliasModes = new List<string> { "Rename", "Change commands" };
+            var editAliasMode = SingleSelectStr($"Edit: {toEditAlias.Name}", editAliasModes);
+            if (editAliasMode == null) continue;
+
+            if (editAliasMode == "Rename")
+            {
+                Header($"Rename: {toEditAlias.Name}");
+                Console.WriteLine("  Esc: cancel\n");
+                var newName = ReadInput("  New name > ");
+                if (string.IsNullOrEmpty(newName)) continue;
+                if (aliases.Any(a => a.Name == newName && a != toEditAlias))
+                {
+                    Console.Write($"  \"{newName}\" already exists. Overwrite? (y/n) > ");
+                    if (Console.ReadLine()?.Trim().ToLower() != "y") { Pause(); continue; }
+                    aliases.RemoveAll(a => a.Name == newName && a != toEditAlias);
+                }
+                aliases[aliases.IndexOf(toEditAlias)] = toEditAlias with { Name = newName };
+            }
+            else
+            {
+                var preSelectedSteps = new HashSet<string>(toEditAlias.Steps);
+                var newSteps = MultiSelect("Change commands", config.Commands, preSelectedSteps);
+                if (newSteps.Count == 0) continue;
+                aliases[aliases.IndexOf(toEditAlias)] = toEditAlias with { Steps = newSteps.Select(c => c.Name).ToList() };
+            }
+
+            SaveAliases(aliasesPath, aliases);
+            Header("Edit alias"); Console.WriteLine("  Saved."); Pause(); continue;
+        }
+
+        if (aliasMode == "Delete alias")
+        {
+            if (aliases.Count == 0)
+            {
+                Header("Delete alias"); Console.WriteLine("  No aliases found."); Pause(); continue;
+            }
+            var toDeleteAliases = MultiSelectGeneric("Delete alias", aliases, a => a.Name);
+            if (toDeleteAliases.Count == 0) continue;
+            foreach (var a in toDeleteAliases) aliases.Remove(a);
+            SaveAliases(aliasesPath, aliases);
+            Header("Delete alias");
+            Console.WriteLine($"  Deleted: {string.Join(", ", toDeleteAliases.Select(a => a.Name))}");
+            Pause();
+        }
+        continue;
+    }
+
     // --- Select commands ---
-    List<Command> selected;
+    List<RunItem> selected;
 
     if (mode == "Run workflow")
     {
@@ -125,24 +221,24 @@ while (true)
         }
 
         var initialCursor = lastWorkflow != null ? Math.Max(0, workflows.FindIndex(p => p.Name == lastWorkflow)) : 0;
-        var workflow = SingleSelect("Run workflow", workflows,
-            p => p.Name, initialCursor);
+        var workflow = SingleSelect("Run workflow", workflows, p => p.Name, initialCursor);
         if (workflow == null) continue;
         selected = workflow.Commands
             .Select(name => config.Commands.FirstOrDefault(c => c.Name == name))
-            .Where(c => c != null).Select(c => c!).ToList();
+            .Where(c => c != null).Select(c => new RunItem(c!.Name, c, null)).ToList();
         lastWorkflow = workflow.Name;
         File.WriteAllText(lastPath, lastWorkflow);
     }
     else if (mode == "Run manually")
     {
-        selected = MultiSelect("Select commands", config.Commands);
-        if (selected.Count == 0) continue;
+        var rawSelected = MultiSelectWithAliases("Select commands", config.Commands, aliases);
+        if (rawSelected.Count == 0) continue;
+        selected = rawSelected;
     }
     else // Create workflow
     {
-        selected = MultiSelect("Select commands", config.Commands);
-        if (selected.Count == 0) continue;
+        var cmdSelected = MultiSelect("Select commands", config.Commands);
+        if (cmdSelected.Count == 0) continue;
 
         Header("Create workflow");
         Console.WriteLine("  Esc: cancel\n");
@@ -156,7 +252,7 @@ while (true)
                 if (Console.ReadLine()?.Trim().ToLower() != "y") { Pause(); continue; }
                 workflows.Remove(existing);
             }
-            workflows.Add(new Workflow(name, selected.Select(c => c.Name).ToList()));
+            workflows.Add(new Workflow(name, cmdSelected.Select(c => c.Name).ToList()));
             SaveWorkflows(workflowsPath, workflows);
             Console.WriteLine("  Saved.");
             Pause();
@@ -167,29 +263,72 @@ while (true)
     // --- Confirm ---
     if (!ConfirmDialog(selected)) continue;
 
-    // --- Pre-run validation ---
+    // --- Reload config and validate ---
+    Config? freshConfig;
     {
-        var latestConfig = JsonSerializer.Deserialize<Config>(File.ReadAllText(Path.Combine(projectDir, "config.json")));
-        var latestNames = latestConfig?.Commands.Select(c => c.Name).ToHashSet() ?? new();
-        var missing = selected.Where(c => !latestNames.Contains(c.Name)).Select(c => c.Name).ToList();
+        var jsonPath = Path.Combine(projectDir, "config.json");
+        var tsvPath  = Path.Combine(projectDir, "config.tsv");
+        freshConfig = File.Exists(jsonPath)
+            ? JsonSerializer.Deserialize<Config>(File.ReadAllText(jsonPath))
+            : File.Exists(tsvPath) ? ParseTsv(tsvPath) : null;
+
+        if (freshConfig == null)
+        {
+            Header("Error");
+            Console.WriteLine("  Failed to reload config.");
+            Pause(); continue;
+        }
+
+        var latestNames = freshConfig.Commands.Select(c => c.Name).ToHashSet();
+        var missing = new List<string>();
+        foreach (var item in selected)
+        {
+            if (item.IsAlias)
+            {
+                var badSteps = item.Alias!.Steps.Where(s => !latestNames.Contains(s)).ToList();
+                foreach (var s in badSteps) missing.Add($"{item.Name} → {s}");
+            }
+            else if (!latestNames.Contains(item.Cmd!.Name))
+            {
+                missing.Add(item.Cmd.Name);
+            }
+        }
         if (missing.Count > 0)
         {
             Header("Error");
-            Console.WriteLine("  The following commands no longer exist in config.json:\n");
+            Console.WriteLine("  The following commands no longer exist in config:\n");
             foreach (var m in missing) Console.WriteLine($"    {m}");
             Console.WriteLine("\n  Reload config and try again.");
             Pause(); continue;
         }
     }
 
-    // --- Execute ---
+    // --- Expand aliases and execute (using freshConfig) ---
+    var toRun = new List<Command>();
+    foreach (var item in selected)
+    {
+        if (item.IsAlias)
+        {
+            foreach (var stepName in item.Alias!.Steps)
+            {
+                var cmd = freshConfig.Commands.FirstOrDefault(c => c.Name == stepName);
+                if (cmd != null) toRun.Add(cmd);
+            }
+        }
+        else
+        {
+            var cmd = freshConfig.Commands.FirstOrDefault(c => c.Name == item.Cmd!.Name);
+            if (cmd != null) toRun.Add(cmd);
+        }
+    }
+
     Header("Running");
     var success = true;
     int completed = 0;
-    for (int i = 0; i < selected.Count; i++)
+    for (int i = 0; i < toRun.Count; i++)
     {
-        var cmd = selected[i];
-        Console.WriteLine($"  [{i + 1}/{selected.Count}] {C.White}{cmd.Name}{C.Reset}");
+        var cmd = toRun[i];
+        Console.WriteLine($"  [{i + 1}/{toRun.Count}] {C.White}{cmd.Name}{C.Reset}");
         Console.WriteLine($"  {C.Gray}> {cmd.Cmd}{C.Reset}");
         Console.WriteLine();
         if (!RunCommand(cmd.Cmd, cmd.Dir, cmd.Shell))
@@ -199,7 +338,7 @@ while (true)
             break;
         }
         completed++;
-        Console.WriteLine(ProgressBar(completed, selected.Count));
+        Console.WriteLine(ProgressBar(completed, toRun.Count));
         Console.WriteLine();
     }
 
@@ -214,13 +353,14 @@ while (true)
 
 // --- Load config ---
 
-static (Config? config, List<Workflow> workflows, string? lastWorkflow, string workflowsPath, string lastPath)
+static (Config? config, List<Workflow> workflows, string? lastWorkflow, string workflowsPath, string lastPath, List<Alias> aliases, string aliasesPath)
     LoadConfig(string projectDir)
 {
     var jsonPath      = Path.Combine(projectDir, "config.json");
     var tsvPath       = Path.Combine(projectDir, "config.tsv");
     var workflowsPath = Path.Combine(projectDir, "workflows.json");
     var lastPath      = Path.Combine(projectDir, ".last");
+    var aliasesPath   = Path.Combine(projectDir, "aliases.json");
 
     Config? config = null;
     if (File.Exists(jsonPath))
@@ -232,12 +372,16 @@ static (Config? config, List<Workflow> workflows, string? lastWorkflow, string w
     {
         Console.WriteLine("Failed to load config. Add config.json or config.tsv.");
         Pause();
-        return (null, new(), null, "", "");
+        return (null, new(), null, "", "", new(), "");
     }
 
     var workflows = File.Exists(workflowsPath)
         ? JsonSerializer.Deserialize<List<Workflow>>(File.ReadAllText(workflowsPath)) ?? new()
         : new List<Workflow>();
+
+    var aliases = File.Exists(aliasesPath)
+        ? JsonSerializer.Deserialize<List<Alias>>(File.ReadAllText(aliasesPath)) ?? new()
+        : new List<Alias>();
 
     var lastWorkflow = File.Exists(lastPath) ? File.ReadAllText(lastPath).Trim() : null;
 
@@ -259,7 +403,7 @@ static (Config? config, List<Workflow> workflows, string? lastWorkflow, string w
         Pause();
     }
 
-    return (config, workflows, lastWorkflow, workflowsPath, lastPath);
+    return (config, workflows, lastWorkflow, workflowsPath, lastPath, aliases, aliasesPath);
 }
 
 static string? SelectProjectDir(List<string> dirs)
@@ -308,17 +452,26 @@ static Config? ParseTsv(string path)
 
 // --- Confirm dialog ---
 
-static bool ConfirmDialog(List<Command> selected)
+static bool ConfirmDialog(List<RunItem> items)
 {
     int btn = 0; // 0 = Run, 1 = Cancel
     while (true)
     {
         Header("Confirm");
-        for (int i = 0; i < selected.Count; i++)
+        for (int i = 0; i < items.Count; i++)
         {
-            var c = selected[i];
-            var group = string.IsNullOrEmpty(c.Group) ? "" : $"  {C.GroupTag}[{c.Group}]{C.Reset}";
-            Console.WriteLine($"  {C.Gray}{i + 1,2}.{C.Reset}  {c.Name}{group}");
+            var item = items[i];
+            if (item.IsAlias)
+            {
+                var steps = string.Join(" > ", item.Alias!.Steps);
+                Console.WriteLine($"  {C.Gray}{i + 1,2}.{C.Reset}  {C.Cyan}@{C.Reset} {item.Name}  {C.Gray}({steps}){C.Reset}");
+            }
+            else
+            {
+                var c = item.Cmd!;
+                var group = string.IsNullOrEmpty(c.Group) ? "" : $"  {C.GroupTag}[{c.Group}]{C.Reset}";
+                Console.WriteLine($"  {C.Gray}{i + 1,2}.{C.Reset}  {c.Name}{group}");
+            }
         }
         Console.WriteLine();
         Console.WriteLine(HLine());
@@ -403,9 +556,9 @@ static List<Command> MultiSelect(string prompt, List<Command> items, HashSet<str
             .Where(x =>
                 (string.IsNullOrEmpty(search) ||
                  x.item.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                 x.item.Group.Contains(search, StringComparison.OrdinalIgnoreCase)) &&
+                 (x.item.Group ?? "").Contains(search, StringComparison.OrdinalIgnoreCase)) &&
                 (string.IsNullOrEmpty(groupSearch) ||
-                 x.item.Group.Contains(groupSearch, StringComparison.OrdinalIgnoreCase)))
+                 (x.item.Group ?? "").Contains(groupSearch, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         if (cursor >= filtered.Count) cursor = Math.Max(0, filtered.Count - 1);
@@ -476,6 +629,125 @@ static List<Command> MultiSelect(string prompt, List<Command> items, HashSet<str
                 return selectedIdx.Select(i => items[i]).ToList();
             case ConsoleKey.Escape:
                 return new List<Command>();
+            default:
+                if (!char.IsControl(key.KeyChar))
+                {
+                    if (activeField == 0) search += key.KeyChar;
+                    else groupSearch += key.KeyChar;
+                    cursor = 0; viewStart = 0;
+                }
+                break;
+        }
+    }
+}
+
+// --- Command + Alias select (for Run manually) ---
+
+static List<RunItem> MultiSelectWithAliases(string prompt, List<Command> commands, List<Alias> aliases)
+{
+    // Build combined list: commands first, then aliases
+    var allItems = commands.Select(c => new RunItem(c.Name, c, null))
+        .Concat(aliases.Select(a => new RunItem(a.Name, null, a)))
+        .ToList();
+
+    var selectedIdx = new List<int>();
+    int cursor = 0, viewStart = 0;
+    string search = "", groupSearch = "";
+    int activeField = 0;
+
+    while (true)
+    {
+        var filtered = allItems
+            .Select((item, idx) => (item, idx))
+            .Where(x =>
+            {
+                var grp = x.item.IsAlias ? "alias" : (x.item.Cmd?.Group ?? "");
+                return (string.IsNullOrEmpty(search) ||
+                        x.item.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        grp.Contains(search, StringComparison.OrdinalIgnoreCase)) &&
+                       (string.IsNullOrEmpty(groupSearch) ||
+                        grp.Contains(groupSearch, StringComparison.OrdinalIgnoreCase));
+            })
+            .ToList();
+
+        if (cursor >= filtered.Count) cursor = Math.Max(0, filtered.Count - 1);
+
+        int viewHeight = Math.Max(1, Console.WindowHeight - 9);
+        if (cursor < viewStart) viewStart = cursor;
+        if (cursor >= viewStart + viewHeight) viewStart = cursor - viewHeight + 1;
+
+        Header(prompt);
+
+        var f0 = activeField == 0 ? C.Cyan : C.Gray;
+        var f1 = activeField == 1 ? C.Cyan : C.Gray;
+        var cur0 = activeField == 0 ? $"{C.Dim}_\u001b[0m" : "";
+        var cur1 = activeField == 1 ? $"{C.Dim}_\u001b[0m" : "";
+        Console.WriteLine($"  {f0}/{C.Reset} {search}{cur0}        {f1}Group /{C.Reset} {groupSearch}{cur1}");
+        Console.WriteLine();
+
+        if (filtered.Count == 0)
+        {
+            Console.WriteLine($"  {C.Gray}No results.{C.Reset}");
+        }
+        else
+        {
+            if (viewStart > 0) Console.WriteLine($"  {C.Gray}...{C.Reset}");
+            var viewEnd = Math.Min(viewStart + viewHeight, filtered.Count);
+            for (int i = viewStart; i < viewEnd; i++)
+            {
+                var (item, origIdx) = filtered[i];
+                var selOrder = selectedIdx.IndexOf(origIdx);
+                var check = selOrder >= 0 ? $"{C.SelNum}[{selOrder + 1}]{C.Reset}" : $"{C.Gray}[ ]{C.Reset}";
+
+                string label;
+                if (item.IsAlias)
+                {
+                    var steps = string.Join($" {C.Gray}>{C.Reset} ", item.Alias!.Steps);
+                    label = $"{C.Cyan}@{C.Reset} {item.Name}  {C.GroupTag}[alias]{C.Reset}  {C.Gray}{steps}{C.Reset}";
+                }
+                else
+                {
+                    var group = string.IsNullOrEmpty(item.Cmd!.Group) ? "" : $"  {C.GroupTag}[{item.Cmd.Group}]{C.Reset}";
+                    label = $"{item.Name}{group}";
+                }
+
+                if (i == cursor)
+                    Console.WriteLine($"  {C.Cyan}>{C.Reset} {check} {label}");
+                else
+                    Console.WriteLine($"    {check} {label}");
+            }
+            if (viewEnd < filtered.Count) Console.WriteLine($"  {C.Gray}...{C.Reset}");
+        }
+
+        var selectedNames = selectedIdx.Select(i => allItems[i].Name).ToList();
+        Console.WriteLine($"\n  {C.Green}Selected({selectedIdx.Count}){C.Reset}: {string.Join(", ", selectedNames)}");
+        PanelHint("↑↓ Space Enter Esc  |  Tab: switch field");
+
+        var key = Console.ReadKey(true);
+        switch (key.Key)
+        {
+            case ConsoleKey.Tab:
+                activeField = 1 - activeField; break;
+            case ConsoleKey.UpArrow:
+                if (filtered.Count > 0) cursor = (cursor - 1 + filtered.Count) % filtered.Count; break;
+            case ConsoleKey.DownArrow:
+                if (filtered.Count > 0) cursor = (cursor + 1) % filtered.Count; break;
+            case ConsoleKey.Spacebar:
+                if (filtered.Count > 0)
+                {
+                    var origIdx = filtered[cursor].idx;
+                    if (selectedIdx.Contains(origIdx)) selectedIdx.Remove(origIdx);
+                    else selectedIdx.Add(origIdx);
+                }
+                break;
+            case ConsoleKey.Backspace:
+                if (activeField == 0 && search.Length > 0) { search = search[..^1]; cursor = 0; viewStart = 0; }
+                else if (activeField == 1 && groupSearch.Length > 0) { groupSearch = groupSearch[..^1]; cursor = 0; viewStart = 0; }
+                break;
+            case ConsoleKey.Enter:
+                return selectedIdx.Select(i => allItems[i]).ToList();
+            case ConsoleKey.Escape:
+                return new List<RunItem>();
             default:
                 if (!char.IsControl(key.KeyChar))
                 {
@@ -678,6 +950,9 @@ static bool RunCommand(string cmd, string? workDir, string? shell = null)
 static void SaveWorkflows(string path, List<Workflow> workflows) =>
     File.WriteAllText(path, JsonSerializer.Serialize(workflows, new JsonSerializerOptions { WriteIndented = true }));
 
+static void SaveAliases(string path, List<Alias> aliases) =>
+    File.WriteAllText(path, JsonSerializer.Serialize(aliases, new JsonSerializerOptions { WriteIndented = true }));
+
 static string? ReadInput(string prompt)
 {
     Console.Write(prompt);
@@ -719,7 +994,7 @@ static void Pause()
 
 record Command(
     [property: JsonPropertyName("name")]  string Name,
-    [property: JsonPropertyName("group")] string Group,
+    [property: JsonPropertyName("group")] string? Group,
     [property: JsonPropertyName("dir")]   string? Dir,
     [property: JsonPropertyName("cmd")]   string Cmd,
     [property: JsonPropertyName("shell")] string? Shell
@@ -734,6 +1009,17 @@ record Workflow(
     [property: JsonPropertyName("commands")] List<string> Commands
 );
 
+record Alias(
+    [property: JsonPropertyName("name")]  string Name,
+    [property: JsonPropertyName("steps")] List<string> Steps
+);
+
+// Represents a selectable item that is either a direct Command or an Alias
+record RunItem(string Name, Command? Cmd, Alias? Alias)
+{
+    public bool IsAlias => Alias != null;
+}
+
 static class C
 {
     public const string Reset    = "\x1b[0m";
@@ -746,7 +1032,6 @@ static class C
     public const string CursorBg = "\x1b[48;5;238m\x1b[97m";
     public const string SelNum   = "\x1b[32m";
     public const string GroupTag = "\x1b[90m";
-
 
     // Display columns used by box-drawing chars (1 = normal, 2 = East-Asian wide)
     public static int BoxCharCols = 1;
