@@ -1,0 +1,7 @@
+name	group	dir	cmd	shell
+task-a1	prepare	Z:\task-a1	echo task-a1 done
+task-a2	prepare	Z:\task-a2	echo task-a2 done
+task-b1	process	Z:\task-b1	echo task-b1 done
+task-b2	process	Z:\task-b2	echo task-b2 done
+task-c1	deploy		echo task-c1 done
+task-c2	deploy		echo task-c2 done
