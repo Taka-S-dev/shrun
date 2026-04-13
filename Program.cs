@@ -61,7 +61,7 @@ while (true)
             Header("Delete workflow"); Console.WriteLine("  No workflows found."); Pause(); continue;
         }
         var toDelete = MultiSelectGeneric("Delete workflow", workflows,
-            p => $"{p.Name}  ({string.Join(" -> ", p.Commands)})");
+            p => p.Name);
         if (toDelete.Count == 0) continue;
 
         foreach (var p in toDelete) workflows.Remove(p);
@@ -79,7 +79,7 @@ while (true)
             Header("Edit workflow"); Console.WriteLine("  No workflows found."); Pause(); continue;
         }
         var toEdit = SingleSelect("Edit workflow", workflows,
-            p => $"{p.Name}  ({string.Join(" -> ", p.Commands)})");
+            p => p.Name);
         if (toEdit == null) continue;
 
         var editModes = new List<string> { "Rename", "Change commands" };
@@ -126,7 +126,7 @@ while (true)
 
         var initialCursor = lastWorkflow != null ? Math.Max(0, workflows.FindIndex(p => p.Name == lastWorkflow)) : 0;
         var workflow = SingleSelect("Run workflow", workflows,
-            p => $"{p.Name}  ({string.Join(" -> ", p.Commands)})", initialCursor);
+            p => p.Name, initialCursor);
         if (workflow == null) continue;
         selected = workflow.Commands
             .Select(name => config.Commands.FirstOrDefault(c => c.Name == name))
@@ -393,30 +393,35 @@ static List<Command> MultiSelect(string prompt, List<Command> items, HashSet<str
             if (preSelected.Contains(items[i].Name)) selectedIdx.Add(i);
 
     int cursor = 0, viewStart = 0;
-    string search = "";
+    string search = "", groupSearch = "";
+    int activeField = 0; // 0 = search, 1 = groupSearch
 
     while (true)
     {
-        var isGroupSearch = search.StartsWith("g:", StringComparison.OrdinalIgnoreCase);
-        var searchTerm = isGroupSearch ? search[2..] : search;
-
         var filtered = items
             .Select((item, idx) => (item, idx))
-            .Where(x => string.IsNullOrEmpty(searchTerm) ||
-                        (isGroupSearch
-                            ? x.item.Group.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)
-                            : x.item.Name .Contains(searchTerm, StringComparison.OrdinalIgnoreCase) ||
-                              x.item.Group.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)))
+            .Where(x =>
+                (string.IsNullOrEmpty(search) ||
+                 x.item.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                 x.item.Group.Contains(search, StringComparison.OrdinalIgnoreCase)) &&
+                (string.IsNullOrEmpty(groupSearch) ||
+                 x.item.Group.Contains(groupSearch, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         if (cursor >= filtered.Count) cursor = Math.Max(0, filtered.Count - 1);
 
-        int viewHeight = Math.Max(1, Console.WindowHeight - 8);
+        int viewHeight = Math.Max(1, Console.WindowHeight - 9);
         if (cursor < viewStart) viewStart = cursor;
         if (cursor >= viewStart + viewHeight) viewStart = cursor - viewHeight + 1;
 
         Header(prompt);
-        Console.WriteLine($"  {C.Cyan}/{C.Reset} {search}{C.Dim}_\n{C.Reset}");
+
+        var f0 = activeField == 0 ? C.Cyan : C.Gray;
+        var f1 = activeField == 1 ? C.Cyan : C.Gray;
+        var cur0 = activeField == 0 ? $"{C.Dim}_\u001b[0m" : "";
+        var cur1 = activeField == 1 ? $"{C.Dim}_\u001b[0m" : "";
+        Console.WriteLine($"  {f0}/{C.Reset} {search}{cur0}        {f1}Group /{C.Reset} {groupSearch}{cur1}");
+        Console.WriteLine();
 
         if (filtered.Count == 0)
         {
@@ -433,7 +438,7 @@ static List<Command> MultiSelect(string prompt, List<Command> items, HashSet<str
                 var check = selOrder >= 0 ? $"{C.SelNum}[{selOrder + 1}]{C.Reset}" : $"{C.Gray}[ ]{C.Reset}";
                 var group = string.IsNullOrEmpty(cmd.Group) ? "" : $"  {C.GroupTag}[{cmd.Group}]{C.Reset}";
                 if (i == cursor)
-                    Console.WriteLine($"  {C.CursorBg}  {check} {cmd.Name}{group}  {C.Reset}");
+                    Console.WriteLine($"  {C.Cyan}>{C.Reset} {check} {cmd.Name}{group}");
                 else
                     Console.WriteLine($"    {check} {cmd.Name}{group}");
             }
@@ -443,15 +448,16 @@ static List<Command> MultiSelect(string prompt, List<Command> items, HashSet<str
         var selectedNames = selectedIdx.Select(i => items[i].Name).ToList();
 
         Console.WriteLine($"\n  {C.Green}Selected({selectedIdx.Count}){C.Reset}: {string.Join(", ", selectedNames)}");
-        PanelHint("↑↓ Space Enter Esc  |  g: group filter");
+        PanelHint("↑↓ Space Enter Esc  |  Tab: switch field");
 
         var key = Console.ReadKey(true);
         switch (key.Key)
         {
+            case ConsoleKey.Tab:
+                activeField = 1 - activeField; break;
             case ConsoleKey.UpArrow:
                 if (filtered.Count > 0) cursor = (cursor - 1 + filtered.Count) % filtered.Count; break;
             case ConsoleKey.DownArrow:
-            case ConsoleKey.Tab:
                 if (filtered.Count > 0) cursor = (cursor + 1) % filtered.Count; break;
             case ConsoleKey.Spacebar:
                 if (filtered.Count > 0)
@@ -463,14 +469,20 @@ static List<Command> MultiSelect(string prompt, List<Command> items, HashSet<str
                 break;
 
             case ConsoleKey.Backspace:
-                if (search.Length > 0) search = search[..^1];
-                cursor = 0; viewStart = 0; break;
+                if (activeField == 0 && search.Length > 0) { search = search[..^1]; cursor = 0; viewStart = 0; }
+                else if (activeField == 1 && groupSearch.Length > 0) { groupSearch = groupSearch[..^1]; cursor = 0; viewStart = 0; }
+                break;
             case ConsoleKey.Enter:
                 return selectedIdx.Select(i => items[i]).ToList();
             case ConsoleKey.Escape:
                 return new List<Command>();
             default:
-                if (!char.IsControl(key.KeyChar)) { search += key.KeyChar; cursor = 0; viewStart = 0; }
+                if (!char.IsControl(key.KeyChar))
+                {
+                    if (activeField == 0) search += key.KeyChar;
+                    else groupSearch += key.KeyChar;
+                    cursor = 0; viewStart = 0;
+                }
                 break;
         }
     }
@@ -496,7 +508,7 @@ static List<T> MultiSelectGeneric<T>(string prompt, List<T> items, Func<T, strin
         {
             var check = selectedIdx.Contains(i) ? $"{C.SelNum}[x]{C.Reset}" : $"{C.Gray}[ ]{C.Reset}";
             if (i == cursor)
-                Console.WriteLine($"  {C.CursorBg}  {check} {label(items[i])}  {C.Reset}");
+                Console.WriteLine($"  {C.Cyan}>{C.Reset} {check} {label(items[i])}");
             else
                 Console.WriteLine($"    {check} {label(items[i])}");
         }
@@ -561,7 +573,7 @@ static T? SingleSelect<T>(string prompt, List<T> items, Func<T, string> label, i
             for (int i = viewStart; i < viewEnd; i++)
             {
                 if (i == cursor)
-                    Console.WriteLine($"  {C.CursorBg}  {label(filtered[i].item)}  {C.Reset}");
+                    Console.WriteLine($"  {C.Cyan}>{C.Reset} {label(filtered[i].item)}");
                 else
                     Console.WriteLine($"    {label(filtered[i].item)}");
             }
@@ -615,7 +627,7 @@ static string? SingleSelectStr(string prompt, List<string> items, bool isMain = 
         for (int i = 0; i < items.Count; i++)
         {
             if (i == cursor)
-                Console.WriteLine($"  {C.CursorBg}  {items[i]}  {C.Reset}");
+                Console.WriteLine($"  {C.Cyan}>{C.Reset} {items[i]}");
             else
                 Console.WriteLine($"    {items[i]}");
         }
