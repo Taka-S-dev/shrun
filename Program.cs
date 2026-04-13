@@ -1,6 +1,10 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+
+Console.OutputEncoding = System.Text.Encoding.UTF8;
+C.BoxCharCols = DetectBoxCharCols();
 
 var baseDir     = AppContext.BaseDirectory;
 var projectsDir = Path.Combine(baseDir, "projects");
@@ -161,18 +165,7 @@ while (true)
     }
 
     // --- Confirm ---
-    Header("Confirm");
-    var sep = "  " + new string('-', 36);
-    Console.WriteLine(sep);
-    foreach (var c in selected)
-    {
-        var group = string.IsNullOrEmpty(c.Group) ? "" : $"   [{c.Group}]";
-        Console.WriteLine($"    {c.Name}{group}");
-    }
-    Console.WriteLine(sep);
-    Console.WriteLine("\n  Enter: run   Esc: back");
-
-    if (Console.ReadKey(true).Key == ConsoleKey.Escape) continue;
+    if (!ConfirmDialog(selected)) continue;
 
     // --- Pre-run validation ---
     {
@@ -192,23 +185,31 @@ while (true)
     // --- Execute ---
     Header("Running");
     var success = true;
+    int completed = 0;
     for (int i = 0; i < selected.Count; i++)
     {
         var cmd = selected[i];
-        Console.WriteLine($"[{i + 1}/{selected.Count}] {cmd.Name}");
-        Console.WriteLine($"  > {cmd.Cmd}");
+        Console.WriteLine($"  [{i + 1}/{selected.Count}] {C.White}{cmd.Name}{C.Reset}");
+        Console.WriteLine($"  {C.Gray}> {cmd.Cmd}{C.Reset}");
+        Console.WriteLine();
         if (!RunCommand(cmd.Cmd, cmd.Dir, cmd.Shell))
         {
-            Console.WriteLine($"\nError: {cmd.Name} failed. Aborting.");
+            Console.WriteLine($"  {C.Gray}Error: {cmd.Name} failed. Aborting.{C.Reset}");
             success = false;
             break;
         }
+        completed++;
+        Console.WriteLine(ProgressBar(completed, selected.Count));
         Console.WriteLine();
     }
 
-    Console.WriteLine(success ? "Done!" : "Aborted.");
+    Console.WriteLine(success ? $"  {C.Green}Done!{C.Reset}" : $"  {C.Gray}Aborted.{C.Reset}");
     if (!success) Pause();
-    else { Thread.Sleep(1000); Console.ReadKey(true); }
+    else
+    {
+        Thread.Sleep(1000);
+        Console.ReadKey(true);
+    }
 }
 
 // --- Load config ---
@@ -305,12 +306,80 @@ static Config? ParseTsv(string path)
     return new Config(commands);
 }
 
+// --- Confirm dialog ---
+
+static bool ConfirmDialog(List<Command> selected)
+{
+    int btn = 0; // 0 = Run, 1 = Cancel
+    while (true)
+    {
+        Header("Confirm");
+        for (int i = 0; i < selected.Count; i++)
+        {
+            var c = selected[i];
+            var group = string.IsNullOrEmpty(c.Group) ? "" : $"  {C.GroupTag}[{c.Group}]{C.Reset}";
+            Console.WriteLine($"  {C.Gray}{i + 1,2}.{C.Reset}  {c.Name}{group}");
+        }
+        Console.WriteLine();
+        Console.WriteLine(HLine());
+        Console.WriteLine();
+
+        var rc = btn == 0 ? $"\x1b[92m{C.Bold}" : C.Gray;
+        var cc = btn == 1 ? $"{C.White}{C.Bold}" : C.Gray;
+        Console.WriteLine($"  {rc}+---------+{C.Reset}      {cc}+------------+{C.Reset}");
+        Console.WriteLine($"  {rc}|   Run   |{C.Reset}      {cc}|   Cancel   |{C.Reset}");
+        Console.WriteLine($"  {rc}+---------+{C.Reset}      {cc}+------------+{C.Reset}");
+        Console.WriteLine($"\n  {C.Gray}Tab: switch   Enter: confirm   Esc: back{C.Reset}");
+
+        switch (Console.ReadKey(true).Key)
+        {
+            case ConsoleKey.Enter:                    return btn == 0;
+            case ConsoleKey.Escape:                   return false;
+            case ConsoleKey.LeftArrow:
+            case ConsoleKey.RightArrow:
+            case ConsoleKey.Tab:                      btn = 1 - btn; break;
+        }
+    }
+}
+
+// --- Progress bar ---
+
+static string ProgressBar(int done, int total, int width = 24)
+{
+    int filled = total > 0 ? (int)((double)done / total * width) : 0;
+    int pct    = total > 0 ? (int)((double)done / total * 100)   : 0;
+    var bar    = $"{C.Green}{new string('#', filled)}{C.Gray}{new string('-', width - filled)}{C.Reset}";
+    return $"  [{bar}]  {C.White}{done}/{total}{C.Reset}  {C.Gray}{pct}%{C.Reset}";
+}
+
+// --- Panel helpers ---
+
+// East-Asian terminals render box-drawing chars as double-width (2 columns each)
+static int DetectBoxCharCols()
+{
+    var lang = CultureInfo.CurrentCulture.TwoLetterISOLanguageName;
+    return (lang == "ja" || lang == "zh" || lang == "ko") ? 2 : 1;
+}
+
+static string HLine()
+{
+    var w = Math.Max(0, (Console.WindowWidth - 4) / C.BoxCharCols);
+    return C.Gray + "  " + new string('─', w) + C.Reset;
+}
+
+static void PanelHint(string hint)
+{
+    Console.WriteLine(HLine());
+    Console.WriteLine($"  {C.Gray}{hint}{C.Reset}");
+}
+
 // --- Header ---
 
 static void Header(string title)
 {
     Console.Clear();
-    Console.WriteLine($"  [ {title} ]");
+    Console.WriteLine($"  {C.Cyan}{C.Bold}[ {title} ]{C.Reset}");
+    Console.WriteLine(HLine());
     Console.WriteLine();
 }
 
@@ -347,32 +416,34 @@ static List<Command> MultiSelect(string prompt, List<Command> items, HashSet<str
         if (cursor >= viewStart + viewHeight) viewStart = cursor - viewHeight + 1;
 
         Header(prompt);
-        Console.WriteLine($"  / {search}_\n");
+        Console.WriteLine($"  {C.Cyan}/{C.Reset} {search}{C.Dim}_\n{C.Reset}");
 
         if (filtered.Count == 0)
         {
-            Console.WriteLine("  No results.");
+            Console.WriteLine($"  {C.Gray}No results.{C.Reset}");
         }
         else
         {
-            if (viewStart > 0) Console.WriteLine("  ...");
+            if (viewStart > 0) Console.WriteLine($"  {C.Gray}...{C.Reset}");
             var viewEnd = Math.Min(viewStart + viewHeight, filtered.Count);
             for (int i = viewStart; i < viewEnd; i++)
             {
                 var (cmd, origIdx) = filtered[i];
                 var selOrder = selectedIdx.IndexOf(origIdx);
-                var check = selOrder >= 0 ? $"[{selOrder + 1}]" : "[ ]";
-                var arrow = i == cursor ? ">" : " ";
-                var group = string.IsNullOrEmpty(cmd.Group) ? "" : $"   [{cmd.Group}]";
-                Console.WriteLine($"  {arrow} {check} {cmd.Name}{group}");
+                var check = selOrder >= 0 ? $"{C.SelNum}[{selOrder + 1}]{C.Reset}" : $"{C.Gray}[ ]{C.Reset}";
+                var group = string.IsNullOrEmpty(cmd.Group) ? "" : $"  {C.GroupTag}[{cmd.Group}]{C.Reset}";
+                if (i == cursor)
+                    Console.WriteLine($"  {C.CursorBg}  {check} {cmd.Name}{group}  {C.Reset}");
+                else
+                    Console.WriteLine($"    {check} {cmd.Name}{group}");
             }
-            if (viewEnd < filtered.Count) Console.WriteLine("  ...");
+            if (viewEnd < filtered.Count) Console.WriteLine($"  {C.Gray}...{C.Reset}");
         }
 
         var selectedNames = selectedIdx.Select(i => items[i].Name).ToList();
 
-        Console.WriteLine($"\n  Selected({selectedIdx.Count}): {string.Join(", ", selectedNames)}");
-        Console.WriteLine("  ↑↓ Space Enter Esc  |  g: filter by group");
+        Console.WriteLine($"\n  {C.Green}Selected({selectedIdx.Count}){C.Reset}: {string.Join(", ", selectedNames)}");
+        PanelHint("↑↓ Space Enter Esc  |  g: group filter");
 
         var key = Console.ReadKey(true);
         switch (key.Key)
@@ -419,18 +490,20 @@ static List<T> MultiSelectGeneric<T>(string prompt, List<T> items, Func<T, strin
         if (cursor >= viewStart + viewHeight) viewStart = cursor - viewHeight + 1;
 
         Header(prompt);
-        if (viewStart > 0) Console.WriteLine("  ...");
+        if (viewStart > 0) Console.WriteLine($"  {C.Gray}...{C.Reset}");
         var viewEnd = Math.Min(viewStart + viewHeight, items.Count);
         for (int i = viewStart; i < viewEnd; i++)
         {
-            var check = selectedIdx.Contains(i) ? "[x]" : "[ ]";
-            var arrow = i == cursor ? ">" : " ";
-            Console.WriteLine($"  {arrow} {check} {label(items[i])}");
+            var check = selectedIdx.Contains(i) ? $"{C.SelNum}[x]{C.Reset}" : $"{C.Gray}[ ]{C.Reset}";
+            if (i == cursor)
+                Console.WriteLine($"  {C.CursorBg}  {check} {label(items[i])}  {C.Reset}");
+            else
+                Console.WriteLine($"    {check} {label(items[i])}");
         }
-        if (viewEnd < items.Count) Console.WriteLine("  ...");
+        if (viewEnd < items.Count) Console.WriteLine($"  {C.Gray}...{C.Reset}");
 
-        Console.WriteLine($"\n  Selected({selectedIdx.Count})");
-        Console.WriteLine("  ↑↓ Space Enter Esc");
+        Console.WriteLine($"\n  {C.Green}Selected({selectedIdx.Count}){C.Reset}");
+        PanelHint("↑↓ Space Enter Esc");
 
         var key = Console.ReadKey(true);
         switch (key.Key)
@@ -475,22 +548,28 @@ static T? SingleSelect<T>(string prompt, List<T> items, Func<T, string> label, i
         if (cursor >= viewStart + viewHeight) viewStart = cursor - viewHeight + 1;
 
         Header(prompt);
-        Console.WriteLine($"  / {search}_\n");
+        Console.WriteLine($"  {C.Cyan}/{C.Reset} {search}{C.Dim}_\n{C.Reset}");
 
         if (filtered.Count == 0)
         {
-            Console.WriteLine("  No results.");
+            Console.WriteLine($"  {C.Gray}No results.{C.Reset}");
         }
         else
         {
-            if (viewStart > 0) Console.WriteLine("  ...");
+            if (viewStart > 0) Console.WriteLine($"  {C.Gray}...{C.Reset}");
             var viewEnd = Math.Min(viewStart + viewHeight, filtered.Count);
             for (int i = viewStart; i < viewEnd; i++)
-                Console.WriteLine($"  {(i == cursor ? ">" : " ")} {label(filtered[i].item)}");
-            if (viewEnd < filtered.Count) Console.WriteLine("  ...");
+            {
+                if (i == cursor)
+                    Console.WriteLine($"  {C.CursorBg}  {label(filtered[i].item)}  {C.Reset}");
+                else
+                    Console.WriteLine($"    {label(filtered[i].item)}");
+            }
+            if (viewEnd < filtered.Count) Console.WriteLine($"  {C.Gray}...{C.Reset}");
         }
 
-        Console.WriteLine("\n  ↑↓ Enter Esc");
+        Console.WriteLine();
+        PanelHint("↑↓ Enter Esc");
 
         var key = Console.ReadKey(true);
         switch (key.Key)
@@ -516,26 +595,40 @@ static T? SingleSelect<T>(string prompt, List<T> items, Func<T, string> label, i
 static string? SingleSelectStr(string prompt, List<string> items, bool isMain = false, string? subtitle = null)
 {
     int cursor = 0;
+    bool firstShow = isMain;
     while (true)
     {
         Console.Clear();
         if (isMain)
         {
-            Console.WriteLine("  +---------------------------------+");
-            Console.WriteLine("  |            SHRUN               |");
-            Console.WriteLine("  +---------------------------------+");
-            if (subtitle != null) Console.WriteLine($"  config: {subtitle}");
+            Console.WriteLine($"  ┌───────────────┐");
+            Console.WriteLine($"  │  {C.Bold}{C.White}S H R U N{C.Reset}    │");
+            Console.WriteLine($"  └───────────────┘");
+            if (subtitle != null) Console.WriteLine($"  {C.Gray}project: {subtitle}{C.Reset}");
         }
         else
         {
-            Console.WriteLine($"  [ {prompt} ]");
+            Console.WriteLine($"  {C.Cyan}{C.Bold}[ {prompt} ]{C.Reset}");
         }
         Console.WriteLine();
 
         for (int i = 0; i < items.Count; i++)
-            Console.WriteLine($"  {(i == cursor ? ">" : " ")} {items[i]}");
+        {
+            if (i == cursor)
+                Console.WriteLine($"  {C.CursorBg}  {items[i]}  {C.Reset}");
+            else
+                Console.WriteLine($"    {items[i]}");
+        }
 
-        Console.WriteLine("\n  ↑↓ Enter Esc");
+        Console.WriteLine();
+        PanelHint("↑↓ Enter Esc");
+
+        if (firstShow)
+        {
+            firstShow = false;
+            Thread.Sleep(300);
+            while (Console.KeyAvailable) Console.ReadKey(true);
+        }
 
         var key = Console.ReadKey(true);
         switch (key.Key)
@@ -628,3 +721,21 @@ record Workflow(
     [property: JsonPropertyName("name")]     string Name,
     [property: JsonPropertyName("commands")] List<string> Commands
 );
+
+static class C
+{
+    public const string Reset    = "\x1b[0m";
+    public const string Bold     = "\x1b[1m";
+    public const string Dim      = "\x1b[2m";
+    public const string Green    = "\x1b[32m";
+    public const string Cyan     = "\x1b[36m";
+    public const string Gray     = "\x1b[90m";
+    public const string White    = "\x1b[97m";
+    public const string CursorBg = "\x1b[48;5;238m\x1b[97m";
+    public const string SelNum   = "\x1b[32m";
+    public const string GroupTag = "\x1b[90m";
+
+
+    // Display columns used by box-drawing chars (1 = normal, 2 = East-Asian wide)
+    public static int BoxCharCols = 1;
+}
