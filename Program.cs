@@ -38,9 +38,13 @@ if (config == null) return;
 
 var modes = new List<string> { "Run workflow", "Run manually", "Create workflow", "Edit workflow", "Delete workflow", "Manage aliases", "Switch config", "Exit" };
 
+try
+{
+
 while (true)
 {
     // Reload config on each iteration so selection screens always show latest
+    try
     {
         var reloadJson = Path.Combine(projectDir, "config.json");
         var reloadTsv  = Path.Combine(projectDir, "config.tsv");
@@ -48,6 +52,13 @@ while (true)
             ? JsonSerializer.Deserialize<Config>(File.ReadAllText(reloadJson))
             : File.Exists(reloadTsv) ? ParseTsv(reloadTsv) : null;
         if (reloaded != null && reloaded.Commands.Count > 0) config = reloaded;
+    }
+    catch (Exception ex)
+    {
+        Header("Warning");
+        Console.WriteLine($"  Failed to reload config: {ex.Message}");
+        Console.WriteLine("  Using last loaded config.");
+        Pause();
     }
 
     var mode = SingleSelectStr("Mode", modes, isMain: true, subtitle: Path.GetFileName(projectDir));
@@ -350,6 +361,16 @@ while (true)
         Thread.Sleep(1000);
         Console.ReadKey(true);
     }
+}
+
+} // end try
+catch (Exception ex)
+{
+    Console.Clear();
+    Console.WriteLine($"\n  {C.Gray}Unexpected error: {ex.Message}{C.Reset}");
+    Console.WriteLine($"\n  {C.Gray}{ex.GetType().Name}{C.Reset}");
+    Console.WriteLine("\n  Press Enter to exit...");
+    Console.ReadLine();
 }
 
 // --- Load config ---
@@ -933,26 +954,40 @@ static string? SingleSelectStr(string prompt, List<string> items, bool isMain = 
 
 static bool RunCommand(string cmd, string? workDir, string? shell = null)
 {
-    var usePs = shell == "ps" || shell == "powershell";
-    var psi = new ProcessStartInfo
+    try
     {
-        FileName    = usePs ? "powershell.exe" : "cmd.exe",
-        Arguments   = usePs ? $"-NoProfile -Command {cmd}" : $"/c {cmd}",
-        UseShellExecute = false,
-    };
-    if (!string.IsNullOrEmpty(workDir))
-        psi.WorkingDirectory = workDir;
+        var usePs = shell == "ps" || shell == "powershell";
+        var psi = new ProcessStartInfo
+        {
+            FileName    = usePs ? "powershell.exe" : "cmd.exe",
+            Arguments   = usePs ? $"-NoProfile -Command {cmd}" : $"/c {cmd}",
+            UseShellExecute = false,
+        };
+        if (!string.IsNullOrEmpty(workDir))
+            psi.WorkingDirectory = workDir;
 
-    using var proc = Process.Start(psi)!;
-    proc.WaitForExit();
-    return proc.ExitCode == 0;
+        using var proc = Process.Start(psi)!;
+        proc.WaitForExit();
+        return proc.ExitCode == 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  {C.Gray}Error: {ex.Message}{C.Reset}");
+        return false;
+    }
 }
 
-static void SaveWorkflows(string path, List<Workflow> workflows) =>
-    File.WriteAllText(path, JsonSerializer.Serialize(workflows, new JsonSerializerOptions { WriteIndented = true }));
+static void SaveWorkflows(string path, List<Workflow> workflows)
+{
+    try { File.WriteAllText(path, JsonSerializer.Serialize(workflows, new JsonSerializerOptions { WriteIndented = true })); }
+    catch (Exception ex) { Console.WriteLine($"\n  Failed to save workflows: {ex.Message}"); Pause(); }
+}
 
-static void SaveAliases(string path, List<Alias> aliases) =>
-    File.WriteAllText(path, JsonSerializer.Serialize(aliases, new JsonSerializerOptions { WriteIndented = true }));
+static void SaveAliases(string path, List<Alias> aliases)
+{
+    try { File.WriteAllText(path, JsonSerializer.Serialize(aliases, new JsonSerializerOptions { WriteIndented = true })); }
+    catch (Exception ex) { Console.WriteLine($"\n  Failed to save aliases: {ex.Message}"); Pause(); }
+}
 
 static string? ReadInput(string prompt)
 {
