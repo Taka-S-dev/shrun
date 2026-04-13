@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
+Console.InputEncoding  = System.Text.Encoding.UTF8;
 C.BoxCharCols = DetectBoxCharCols();
 
 var baseDir     = AppContext.BaseDirectory;
