@@ -174,6 +174,21 @@ while (true)
 
     if (Console.ReadKey(true).Key == ConsoleKey.Escape) continue;
 
+    // --- Pre-run validation ---
+    {
+        var latestConfig = JsonSerializer.Deserialize<Config>(File.ReadAllText(Path.Combine(projectDir, "config.json")));
+        var latestNames = latestConfig?.Commands.Select(c => c.Name).ToHashSet() ?? new();
+        var missing = selected.Where(c => !latestNames.Contains(c.Name)).Select(c => c.Name).ToList();
+        if (missing.Count > 0)
+        {
+            Header("Error");
+            Console.WriteLine("  The following commands no longer exist in config.json:\n");
+            foreach (var m in missing) Console.WriteLine($"    {m}");
+            Console.WriteLine("\n  Reload config and try again.");
+            Pause(); continue;
+        }
+    }
+
     // --- Execute ---
     Header("Running");
     var success = true;
@@ -192,7 +207,8 @@ while (true)
     }
 
     Console.WriteLine(success ? "Done!" : "Aborted.");
-    Pause();
+    if (!success) Pause();
+    else { Thread.Sleep(1000); Console.ReadKey(true); }
 }
 
 // --- Load config ---
@@ -200,14 +216,20 @@ while (true)
 static (Config? config, List<Workflow> workflows, string? lastWorkflow, string workflowsPath, string lastPath)
     LoadConfig(string projectDir)
 {
-    var configPath    = Path.Combine(projectDir, "config.json");
+    var jsonPath      = Path.Combine(projectDir, "config.json");
+    var tsvPath       = Path.Combine(projectDir, "config.tsv");
     var workflowsPath = Path.Combine(projectDir, "workflows.json");
     var lastPath      = Path.Combine(projectDir, ".last");
 
-    var config = JsonSerializer.Deserialize<Config>(File.ReadAllText(configPath));
+    Config? config = null;
+    if (File.Exists(jsonPath))
+        config = JsonSerializer.Deserialize<Config>(File.ReadAllText(jsonPath));
+    else if (File.Exists(tsvPath))
+        config = ParseTsv(tsvPath);
+
     if (config == null || config.Commands.Count == 0)
     {
-        Console.WriteLine("Failed to load config.");
+        Console.WriteLine("Failed to load config. Add config.json or config.tsv.");
         Pause();
         return (null, new(), null, "", "");
     }
@@ -245,6 +267,42 @@ static string? SelectProjectDir(List<string> dirs)
     var selected = SingleSelectStr("Select project", names!);
     if (selected == null) return null;
     return dirs[names.IndexOf(selected)];
+}
+
+// --- TSV parser ---
+
+static Config? ParseTsv(string path)
+{
+    var lines = File.ReadAllLines(path);
+    if (lines.Length < 2) return null;
+
+    var headers = lines[0].Split('\t').Select(h => h.Trim().ToLower()).ToList();
+    int Col(string name) => headers.IndexOf(name);
+
+    var iName  = Col("name");
+    var iGroup = Col("group");
+    var iDir   = Col("dir");
+    var iCmd   = Col("cmd");
+    var iShell = Col("shell");
+
+    if (iName < 0 || iCmd < 0) return null;
+
+    var commands = new List<Command>();
+    foreach (var line in lines.Skip(1))
+    {
+        if (string.IsNullOrWhiteSpace(line)) continue;
+        var cols = line.Split('\t');
+        string Get(int i) => i >= 0 && i < cols.Length ? cols[i].Trim() : "";
+        commands.Add(new Command(
+            Name:  Get(iName),
+            Group: Get(iGroup),
+            Dir:   Get(iDir),
+            Cmd:   Get(iCmd),
+            Shell: string.IsNullOrEmpty(Get(iShell)) ? null : Get(iShell)
+        ));
+    }
+
+    return new Config(commands);
 }
 
 // --- Header ---
