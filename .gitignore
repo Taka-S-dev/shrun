@@ -9,3 +9,5 @@
 !projects/default/
 !projects/default/config.json
 !projects/default/config.tsv
+!projects/default/vars/
+!projects/default/vars/*.tsv

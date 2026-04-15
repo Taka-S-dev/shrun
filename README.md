@@ -7,6 +7,7 @@ A terminal-based workflow runner for Windows. Define commands in a config file, 
 - Interactive TUI with real-time search and multi-select
 - Save and reuse command combinations as workflows
 - Combine multiple commands into a single alias
+- Variable substitution via `{varName}` placeholders — pick values at runtime from a managed list
 - Supports both `cmd.exe` and PowerShell per command
 - Remembers the last used workflow
 - Scroll support for large command lists
@@ -23,6 +24,8 @@ shrun/
     └── default/        # Project folder (one per project)
         ├── config.json # Command definitions (JSON)
         ├── config.tsv  # Command definitions (TSV, alternative to JSON)
+        ├── vars/       # Variable definitions (one .tsv per variable)
+        │   └── env.tsv
         ├── workflows.json  # Saved workflows (auto-generated, not committed)
         └── aliases.json    # Saved aliases (auto-generated, not committed)
 ```
@@ -56,12 +59,9 @@ If multiple projects exist, shrun shows a selection screen on startup. Use **Swi
 ```json
 {
   "commands": [
-    { "name": "task-a1", "group": "prepare", "dir": "Z:\\task-a1", "cmd": "echo task-a1 done" },
-    { "name": "task-a2", "group": "prepare", "dir": "Z:\\task-a2", "cmd": "echo task-a2 done" },
-    { "name": "task-b1", "group": "process", "dir": "Z:\\task-b1", "cmd": "echo task-b1 done" },
-    { "name": "task-b2", "group": "process", "dir": "Z:\\task-b2", "cmd": "echo task-b2 done" },
-    { "name": "task-c1", "group": "deploy",  "dir": "",            "cmd": "echo task-c1 done" },
-    { "name": "task-c2", "group": "deploy",  "dir": "",            "cmd": "echo task-c2 done" }
+    { "name": "build",   "group": "make",   "dir": "{project}", "cmd": "echo building {project}" },
+    { "name": "test",    "group": "make",   "dir": "{project}", "cmd": "echo testing {project}" },
+    { "name": "deploy",  "group": "deploy", "dir": "",          "cmd": "echo deploying {env}" }
   ]
 }
 ```
@@ -72,12 +72,9 @@ Tab-separated alternative to `config.json`. If both files exist, `config.json` t
 
 ```
 name	group	dir	cmd	shell
-task-a1	prepare	Z:\task-a1	echo task-a1 done
-task-a2	prepare	Z:\task-a2	echo task-a2 done
-task-b1	process	Z:\task-b1	echo task-b1 done
-task-b2	process	Z:\task-b2	echo task-b2 done
-task-c1	deploy		echo task-c1 done
-task-c2	deploy		echo task-c2 done
+build	make	{project}	echo building {project}
+test	make	{project}	echo testing {project}
+deploy	deploy		echo deploying {env}
 ```
 
 ## Config fields
@@ -86,9 +83,32 @@ task-c2	deploy		echo task-c2 done
 |---------|----------|-------------|
 | `name`  | Yes      | Command name |
 | `group` | No       | Group label for filtering |
-| `dir`   | No       | Working directory (leave empty to use current) |
-| `cmd`   | Yes      | Command to execute |
+| `dir`   | No       | Working directory (leave empty to use current). Supports `{varName}` |
+| `cmd`   | Yes      | Command to execute. Supports `{varName}` |
 | `shell` | No       | `"ps"` for PowerShell, omit for cmd.exe |
+
+## Variables
+
+Use `{varName}` placeholders in `cmd` or `dir` to prompt for a value at runtime.
+
+### Defining variables
+
+Open **Manage vars** from the main menu to create and edit variable lists. Each variable is stored as a `.tsv` file in `projects/<name>/vars/`.
+
+```
+value       label (optional)
+dev         development
+stg         staging
+prd         production
+```
+
+### Using variables in workflows and aliases
+
+When creating a workflow or alias that contains commands with `{varName}` placeholders, shrun prompts you to pick a value for each variable. The selected values are saved with the workflow/alias so you don't need to re-enter them at run time.
+
+### Using variables in Run manually
+
+When running commands manually, shrun prompts for any unresolved `{varName}` values before execution. The same value is reused across all commands that share the same variable name.
 
 ## Usage
 
@@ -105,6 +125,7 @@ Run `shrun.exe` from the terminal. Use arrow keys to navigate.
     Edit workflow
     Delete workflow
     Manage aliases
+    Manage vars
     Switch config
     Exit
 ```
@@ -138,10 +159,10 @@ Aliases are stored in `aliases.json` (per project, not committed to git).
 
 ## Working Directory
 
-The `dir` field accepts any absolute path:
+The `dir` field accepts any absolute path or a `{varName}` placeholder:
 
 ```json
-{ "name": "task-a1", "dir": "C:\\Users\\you\\project\\task-a1", "cmd": "echo done" }
+{ "name": "build", "dir": "{project}", "cmd": "echo building" }
 ```
 
 **Optional: Virtual Drive**
