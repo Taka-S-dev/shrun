@@ -4,7 +4,7 @@ namespace Shrun;
 
 static class Runner
 {
-    private static Process? _current;
+    private static volatile Process? _current;
 
     static Runner()
     {

@@ -29,18 +29,25 @@ static class ConfigStore
             try { Directory.Move(oldVarsDir, listsDir); } catch { }
         }
 
+        string? attemptedPath = null;
         Config? config = null;
         try
         {
             if (File.Exists(jsonPath))
+            {
+                attemptedPath = jsonPath;
                 config = JsonSerializer.Deserialize<Config>(File.ReadAllText(jsonPath));
+            }
             else if (File.Exists(tsvPath))
+            {
+                attemptedPath = tsvPath;
                 config = ParseTsv(tsvPath);
+            }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Failed to parse config: {ex.Message}");
-            Console.WriteLine($"  File: {(File.Exists(jsonPath) ? jsonPath : tsvPath)}");
+            if (attemptedPath != null) Console.WriteLine($"  File: {attemptedPath}");
             Pause();
             return (null, [], null, "", "", [], "", [], "");
         }
@@ -52,17 +59,8 @@ static class ConfigStore
             return (null, [], null, "", "", [], "", [], "");
         }
 
-        List<Workflow> workflows = [];
-        try { workflows = File.Exists(workflowsPath)
-            ? JsonSerializer.Deserialize<List<Workflow>>(File.ReadAllText(workflowsPath)) ?? []
-            : []; }
-        catch { Console.WriteLine($"  Warning: Could not parse workflows.json — starting fresh."); }
-
-        List<Alias> aliases = [];
-        try { aliases = File.Exists(aliasesPath)
-            ? JsonSerializer.Deserialize<List<Alias>>(File.ReadAllText(aliasesPath)) ?? []
-            : []; }
-        catch { Console.WriteLine($"  Warning: Could not parse aliases.json — starting fresh."); }
+        var workflows = LoadJsonList<Workflow>(workflowsPath, "workflows.json");
+        var aliases   = LoadJsonList<Alias>(aliasesPath, "aliases.json");
 
         var lists = LoadListsFromDir(listsDir);
 
@@ -154,6 +152,21 @@ static class ConfigStore
 
     public static void SaveAliases(string path, List<Alias> aliases) =>
         AtomicWrite(path, JsonSerializer.Serialize(aliases, JsonOpts), "aliases");
+
+    private static List<T> LoadJsonList<T>(string path, string filename)
+    {
+        try
+        {
+            return File.Exists(path)
+                ? JsonSerializer.Deserialize<List<T>>(File.ReadAllText(path)) ?? []
+                : [];
+        }
+        catch
+        {
+            Console.WriteLine($"  Warning: Could not parse {filename} — starting fresh.");
+            return [];
+        }
+    }
 
     private static void AtomicWrite(string path, string content, string label)
     {

@@ -189,7 +189,6 @@ while (true)
                 if (existing == null) break;
                 Console.Write($"  \"{aliasName}\" already exists. Overwrite? (y/n) > ");
                 if (Console.ReadLine()?.Trim().ToLower() == "y") { aliases.Remove(existing); break; }
-                // n or Enter → ask for a different name
             }
             if (aliasName != null)
             {
@@ -501,7 +500,6 @@ while (true)
             if (existing == null) break;
             Console.Write($"  \"{name}\" already exists. Overwrite? (y/n) > ");
             if (Console.ReadLine()?.Trim().ToLower() == "y") { workflows.Remove(existing); break; }
-            // n or Enter → ask for a different name
         }
         if (name != null)
         {
@@ -582,13 +580,9 @@ while (true)
 
     // --- Validate: no unresolved placeholders ---
     var unresolved = toRun
-        .Where(c => C.SlotPattern.IsMatch(c.Cmd) || C.SlotPattern.IsMatch(c.Dir ?? ""))
-        .Select(c =>
-        {
-            var slots = C.SlotPattern.Matches(c.Cmd).Concat(C.SlotPattern.Matches(c.Dir ?? ""))
-                .Select(m => $"{{{m.Groups[1].Value}}}").Distinct();
-            return $"{c.Name}: {string.Join(", ", slots)}";
-        }).ToList();
+        .Select(c => (cmd: c, slots: ExtractAllSlotNames(c)))
+        .Where(x => x.slots.Count > 0)
+        .Select(x => $"{x.cmd.Name}: {string.Join(", ", x.slots.Select(s => $"{{{s}}}"))}").ToList();
     if (unresolved.Count > 0)
     {
         Header("Error");
