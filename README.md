@@ -41,8 +41,8 @@ shrun/
 ## Requirements
 
 - Windows
-- [.NET 10.0 SDK](https://dotnet.microsoft.com/download) (to build from source)
-- [.NET 10.0 Runtime](https://dotnet.microsoft.com/download) (to run the exe only)
+- [.NET 8.0 SDK](https://dotnet.microsoft.com/download) (to build from source)
+- [.NET 8.0 Runtime](https://dotnet.microsoft.com/download) (to run the exe only)
 
 ## Setup
 
@@ -133,6 +133,12 @@ When running commands manually, shrun prompts for each placeholder before execut
 ## Usage
 
 Run `shrun.exe` from the terminal. Use arrow keys to navigate.
+
+```
+shrun.exe [--dry-run]
+```
+
+`--dry-run` shows what would be executed without running any commands.
 
 ```
   ┌───────────────┐

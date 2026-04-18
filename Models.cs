@@ -1,5 +1,8 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+
+[assembly: InternalsVisibleTo("shrun.Tests")]
 
 namespace Shrun;
 

@@ -17,3 +17,10 @@
 !projects/default/config.tsv
 !projects/default/lists/
 !projects/default/lists/*.tsv
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+!shrun.Tests/
+!shrun.Tests/*.cs
+!shrun.Tests/*.csproj
+!build-runner.sln

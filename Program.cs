@@ -10,6 +10,8 @@ Console.OutputEncoding = System.Text.Encoding.UTF8;
 Console.InputEncoding  = System.Text.Encoding.UTF8;
 C.BoxCharCols = DetectBoxCharCols();
 
+bool dryRun = args.Contains("--dry-run");
+
 var baseDir     = AppContext.BaseDirectory;
 var projectsDir = Path.Combine(baseDir, "projects");
 
@@ -601,7 +603,9 @@ while (true)
     bool success = false;
     while (true)
     {
-        Header(retryCount == 0 ? "Running" : $"Running  {C.Gray}(retry {retryCount}){C.Reset}");
+        var headerTitle = dryRun ? $"Dry Run  {C.Gray}(no commands will be executed){C.Reset}"
+            : retryCount == 0 ? "Running" : $"Running  {C.Gray}(retry {retryCount}){C.Reset}";
+        Header(headerTitle);
         success = true;
         int completed = 0;
         int failedAt = -1;
@@ -613,7 +617,7 @@ while (true)
             if (!string.IsNullOrEmpty(cmd.Dir))
                 Console.WriteLine($"         {C.Dim}dir: {cmd.Dir}{C.Reset}");
             Console.WriteLine();
-            if (!RunCommand(cmd.Cmd, cmd.Dir, cmd.Shell))
+            if (!dryRun && !RunCommand(cmd.Cmd, cmd.Dir, cmd.Shell))
             {
                 Console.WriteLine($"  {C.Gray}Error: {cmd.Name} failed.{C.Reset}");
                 success = false;
@@ -625,7 +629,7 @@ while (true)
             Console.WriteLine();
         }
 
-        if (success) break;
+        if (success || dryRun) break;
 
         Console.WriteLine();
         var remaining = string.Join(" → ", toRun.Skip(failedAt).Select(c => c.Name));
