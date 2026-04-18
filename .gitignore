@@ -1,6 +1,12 @@
 *
 !.gitignore
 !Program.cs
+!Models.cs
+!Tui.cs
+!Selectors.cs
+!VarSystem.cs
+!ConfigStore.cs
+!Runner.cs
 !shrun.csproj
 !README.md
 !LICENSE
