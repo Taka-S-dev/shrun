@@ -1,5 +1,7 @@
 # shrun
 
+[![CI](https://github.com/Taka-S-dev/shrun/actions/workflows/ci.yml/badge.svg)](https://github.com/Taka-S-dev/shrun/actions/workflows/ci.yml)
+
 A terminal-based workflow runner for Windows. Define commands in a config file, select and execute them interactively.
 
 ## Features
