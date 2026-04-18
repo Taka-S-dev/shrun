@@ -1,5 +1,5 @@
-name	group	dir	cmd	shell
-build	make	{project}	echo building {project}
+name	group	dir	cmd	shell	vars
+build	make	{projDir}	echo building {projCmd}		projDir=project,projCmd=project
 test	make	{project}	echo testing {project}
 clean	make	{project}	echo cleaning {project}
 deploy	deploy		echo deploying {env}

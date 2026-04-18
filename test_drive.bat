@@ -8,6 +8,9 @@ mkdir "%TARGET%\task-a1" 2>nul
 mkdir "%TARGET%\task-a2" 2>nul
 mkdir "%TARGET%\task-b1" 2>nul
 mkdir "%TARGET%\task-b2" 2>nul
+mkdir "%TARGET%\api" 2>nul
+mkdir "%TARGET%\web" 2>nul
+mkdir "%TARGET%\worker" 2>nul
 
 subst %DRIVE% "%TARGET%"
 

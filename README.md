@@ -7,16 +7,23 @@ A terminal-based workflow runner for Windows. Define commands in a config file, 
 - Interactive TUI with real-time search and multi-select
 - Save and reuse command combinations as workflows
 - Combine multiple commands into a single alias
-- Variable substitution via `{varName}` placeholders — pick values at runtime from a managed list
+- `{placeholder}` substitution — pick values from a selection list at runtime
+- Optional `vars` column to map slot names to named lists
 - Supports both `cmd.exe` and PowerShell per command
 - Remembers the last used workflow
-- Scroll support for large command lists
+- Retry from the failed step when a command fails
 
 ## File Structure
 
 ```
 shrun/
-├── Program.cs          # Main logic
+├── Program.cs          # Entry point and main flow
+├── Models.cs           # Data model records
+├── Tui.cs              # Terminal UI primitives
+├── Selectors.cs        # Interactive selection screens
+├── VarSystem.cs        # Selection list loading and slot resolution
+├── ConfigStore.cs      # Config loading and project management
+├── Runner.cs           # Command execution
 ├── shrun.csproj        # .NET project file
 ├── README.md
 ├── test_drive.bat      # Creates a virtual drive (Z:) for testing
@@ -24,7 +31,8 @@ shrun/
     └── default/        # Project folder (one per project)
         ├── config.json # Command definitions (JSON)
         ├── config.tsv  # Command definitions (TSV, alternative to JSON)
-        ├── vars/       # Variable definitions (one .tsv per variable)
+        ├── lists/      # Selection lists (one .tsv per list)
+        │   ├── project.tsv
         │   └── env.tsv
         ├── workflows.json  # Saved workflows (auto-generated, not committed)
         └── aliases.json    # Saved aliases (auto-generated, not committed)
@@ -59,9 +67,9 @@ If multiple projects exist, shrun shows a selection screen on startup. Use **Swi
 ```json
 {
   "commands": [
-    { "name": "build",   "group": "make",   "dir": "{project}", "cmd": "echo building {project}" },
-    { "name": "test",    "group": "make",   "dir": "{project}", "cmd": "echo testing {project}" },
-    { "name": "deploy",  "group": "deploy", "dir": "",          "cmd": "echo deploying {env}" }
+    { "name": "build",  "group": "make",   "dir": "{projDir}", "cmd": "echo building {projCmd}", "vars": { "projDir": "project", "projCmd": "project" } },
+    { "name": "test",   "group": "make",   "dir": "{project}", "cmd": "echo testing {project}" },
+    { "name": "deploy", "group": "deploy", "dir": "",          "cmd": "echo deploying {env}" }
   ]
 }
 ```
@@ -71,8 +79,8 @@ If multiple projects exist, shrun shows a selection screen on startup. Use **Swi
 Tab-separated alternative to `config.json`. If both files exist, `config.json` takes priority.
 
 ```
-name	group	dir	cmd	shell
-build	make	{project}	echo building {project}
+name	group	dir	cmd	shell	vars
+build	make	{projDir}	echo building {projCmd}		projDir=project,projCmd=project
 test	make	{project}	echo testing {project}
 deploy	deploy		echo deploying {env}
 ```
@@ -83,32 +91,44 @@ deploy	deploy		echo deploying {env}
 |---------|----------|-------------|
 | `name`  | Yes      | Command name |
 | `group` | No       | Group label for filtering |
-| `dir`   | No       | Working directory (leave empty to use current). Supports `{varName}` |
-| `cmd`   | Yes      | Command to execute. Supports `{varName}` |
+| `dir`   | No       | Working directory (leave empty to use current). Supports `{placeholders}` |
+| `cmd`   | Yes      | Command to execute. Supports `{placeholders}` |
 | `shell` | No       | `"ps"` for PowerShell, omit for cmd.exe |
+| `vars`  | No       | Maps slot names to list names (see below) |
 
-## Variables
+## Placeholders and Selection Lists
 
-Use `{varName}` placeholders in `cmd` or `dir` to prompt for a value at runtime.
+Use `{name}` placeholders in `cmd` or `dir` to prompt for a value at runtime.
 
-### Defining variables
+### Selection lists
 
-Open **Manage vars** from the main menu to create and edit variable lists. Each variable is stored as a `.tsv` file in `projects/<name>/vars/`.
+Create lists via **Manage lists** from the main menu. Each list is stored as a `.tsv` file in `projects/<name>/lists/`:
 
 ```
-value       label (optional)
-dev         development
-stg         staging
-prd         production
+Z:\api    api
+Z:\web    web
+Z:\worker worker
 ```
 
-### Using variables in workflows and aliases
+By default, `{name}` selects from the list named `name`. Each occurrence of the same placeholder is prompted independently.
 
-When creating a workflow or alias that contains commands with `{varName}` placeholders, shrun prompts you to pick a value for each variable. The selected values are saved with the workflow/alias so you don't need to re-enter them at run time.
+### vars — mapping slot names to lists
 
-### Using variables in Run manually
+If you want to use different slot names in `dir` and `cmd` but have them select from the same list, use the `vars` field:
 
-When running commands manually, shrun prompts for any unresolved `{varName}` values before execution. The same value is reused across all commands that share the same variable name.
+```json
+{ "dir": "{projDir}", "cmd": "echo building {projCmd}", "vars": { "projDir": "project", "projCmd": "project" } }
+```
+
+Both `{projDir}` and `{projCmd}` will select from the `project` list, but are treated as separate variables — once a value is selected for each, it is reused consistently throughout the command.
+
+### Using placeholders in workflows and aliases
+
+When creating a workflow or alias, shrun prompts you to pick a value for each placeholder. The selected values are saved so you don't need to re-enter them at run time.
+
+### Using placeholders in Run manually
+
+When running commands manually, shrun prompts for each placeholder before execution.
 
 ## Usage
 
@@ -125,7 +145,7 @@ Run `shrun.exe` from the terminal. Use arrow keys to navigate.
     Edit workflow
     Delete workflow
     Manage aliases
-    Manage vars
+    Manage lists
     Switch config
     Exit
 ```
@@ -141,7 +161,7 @@ Run `shrun.exe` from the terminal. Use arrow keys to navigate.
 
 ### Workflows
 
-Workflows are saved combinations of commands. Create one via **Create workflow**, then run it instantly from **Run workflow**.
+Workflows are saved combinations of commands with pre-set placeholder values. Create one via **Create workflow**, then run it instantly from **Run workflow**.
 
 ### Aliases
 
@@ -155,11 +175,23 @@ In the command selection screen, aliases appear with an `@` prefix and `[alias]`
 
 Selecting an alias and running it expands to its component commands at execution time.
 
-Aliases are stored in `aliases.json` (per project, not committed to git).
+### Retry on failure
+
+When a command fails during execution, shrun offers a recovery menu:
+
+```
+  Error: build failed.
+
+> Retry from step 2  (build → test → deploy)
+  Retry all
+  Abort
+```
+
+The header shows `(retry N)` on each subsequent attempt so you can tell the retry is running.
 
 ## Working Directory
 
-The `dir` field accepts any absolute path or a `{varName}` placeholder:
+The `dir` field accepts any absolute path or a `{placeholder}`:
 
 ```json
 { "name": "build", "dir": "{project}", "cmd": "echo building" }

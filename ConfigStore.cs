@@ -1,7 +1,7 @@
 using System.Text.Json;
 using static Shrun.Tui;
 using static Shrun.Selectors;
-using static Shrun.VarSystem;
+using static Shrun.ListSystem;
 
 namespace Shrun;
 
@@ -12,7 +12,7 @@ static class ConfigStore
     public static (Config? config, List<Workflow> workflows, string? lastWorkflow,
                    string workflowsPath, string lastPath,
                    List<Alias> aliases, string aliasesPath,
-                   Dictionary<string, List<VarEntry>> vars, string varsDir)
+                   Dictionary<string, List<ListEntry>> lists, string listsDir)
         LoadConfig(string projectDir)
     {
         var jsonPath      = Path.Combine(projectDir, "config.json");
@@ -20,7 +20,14 @@ static class ConfigStore
         var workflowsPath = Path.Combine(projectDir, "workflows.json");
         var lastPath      = Path.Combine(projectDir, ".last");
         var aliasesPath   = Path.Combine(projectDir, "aliases.json");
-        var varsDir       = Path.Combine(projectDir, "vars");
+        var listsDir      = Path.Combine(projectDir, "lists");
+
+        // Migrate vars/ → lists/ if needed
+        var oldVarsDir = Path.Combine(projectDir, "vars");
+        if (Directory.Exists(oldVarsDir) && !Directory.Exists(listsDir))
+        {
+            try { Directory.Move(oldVarsDir, listsDir); } catch { }
+        }
 
         Config? config = null;
         if (File.Exists(jsonPath))
@@ -32,18 +39,18 @@ static class ConfigStore
         {
             Console.WriteLine("Failed to load config. Add config.json or config.tsv.");
             Pause();
-            return (null, new(), null, "", "", new(), "", new(), "");
+            return (null, [], null, "", "", [], "", [], "");
         }
 
         var workflows = File.Exists(workflowsPath)
-            ? JsonSerializer.Deserialize<List<Workflow>>(File.ReadAllText(workflowsPath)) ?? new()
-            : new List<Workflow>();
+            ? JsonSerializer.Deserialize<List<Workflow>>(File.ReadAllText(workflowsPath)) ?? []
+            : [];
 
         var aliases = File.Exists(aliasesPath)
-            ? JsonSerializer.Deserialize<List<Alias>>(File.ReadAllText(aliasesPath)) ?? new()
-            : new List<Alias>();
+            ? JsonSerializer.Deserialize<List<Alias>>(File.ReadAllText(aliasesPath)) ?? []
+            : [];
 
-        var vars = LoadVarsFromDir(varsDir);
+        var lists = LoadListsFromDir(listsDir);
 
         var lastWorkflow = File.Exists(lastPath) ? File.ReadAllText(lastPath).Trim() : null;
 
@@ -65,7 +72,7 @@ static class ConfigStore
             Pause();
         }
 
-        return (config, workflows, lastWorkflow, workflowsPath, lastPath, aliases, aliasesPath, vars, varsDir);
+        return (config, workflows, lastWorkflow, workflowsPath, lastPath, aliases, aliasesPath, lists, listsDir);
     }
 
     public static string? SelectProjectDir(List<string> dirs)
@@ -78,7 +85,11 @@ static class ConfigStore
 
     public static Config? ParseTsv(string path)
     {
-        var lines = File.ReadAllLines(path);
+        string[] lines;
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var sr = new StreamReader(fs))
+            lines = sr.ReadToEnd().Split(["\r\n", "\n"], StringSplitOptions.None);
+
         if (lines.Length < 2) return null;
 
         var headers = lines[0].Split('\t').Select(h => h.Trim().ToLower()).ToList();
@@ -89,6 +100,7 @@ static class ConfigStore
         var iDir   = Col("dir");
         var iCmd   = Col("cmd");
         var iShell = Col("shell");
+        var iVars  = Col("vars");
 
         if (iName < 0 || iCmd < 0) return null;
 
@@ -98,12 +110,25 @@ static class ConfigStore
             if (string.IsNullOrWhiteSpace(line)) continue;
             var cols = line.Split('\t');
             string Get(int i) => i >= 0 && i < cols.Length ? cols[i].Trim() : "";
+
+            var varsStr = Get(iVars);
+            Dictionary<string, string>? vars = null;
+            if (!string.IsNullOrEmpty(varsStr))
+            {
+                vars = varsStr.Split(',')
+                    .Select(s => s.Split('=', 2))
+                    .Where(p => p.Length == 2 && !string.IsNullOrEmpty(p[0].Trim()))
+                    .ToDictionary(p => p[0].Trim(), p => p[1].Trim());
+                if (vars.Count == 0) vars = null;
+            }
+
             commands.Add(new Command(
                 Name:  Get(iName),
                 Group: Get(iGroup),
                 Dir:   Get(iDir),
                 Cmd:   Get(iCmd),
-                Shell: string.IsNullOrEmpty(Get(iShell)) ? null : Get(iShell)
+                Shell: string.IsNullOrEmpty(Get(iShell)) ? null : Get(iShell),
+                Vars:  vars
             ));
         }
 

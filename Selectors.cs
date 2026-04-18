@@ -1,5 +1,5 @@
 using static Shrun.Tui;
-using static Shrun.VarSystem;
+using static Shrun.ListSystem;
 
 namespace Shrun;
 
@@ -14,7 +14,7 @@ static class Selectors
             for (int i = 0; i < items.Count; i++)
                 if (preSelected.Contains(items[i].Name)) selectedIdx.Add(i);
 
-        var hasVarsMap = items.Select(cmd => ExtractVarNames(cmd).Count > 0).ToArray();
+        var hasVarsMap = items.Select(cmd => HasPlaceholders(cmd)).ToArray();
 
         int cursor = 0, viewStart = 0;
         string search = "", groupSearch = "";
@@ -118,7 +118,7 @@ static class Selectors
             .Concat(aliases.Select(a => new RunItem(a.Name, null, a, null)))
             .ToList();
 
-        var hasVarsMap = allItems.Select(i => !i.IsAlias && ExtractVarNames(i.Cmd!).Count > 0).ToArray();
+        var hasVarsMap = allItems.Select(i => !i.IsAlias && HasPlaceholders(i.Cmd!)).ToArray();
 
         var selectedIdx = new List<int>();
         int cursor = 0, viewStart = 0;
@@ -416,8 +416,9 @@ static class Selectors
                     var c = item.Cmd!;
                     var group = string.IsNullOrEmpty(c.Group) ? "" : $"  {C.GroupTag}[{c.Group}]{C.Reset}";
                     Console.WriteLine($"  {C.Gray}{i + 1,2}.{C.Reset}  {c.Name}{group}");
+                    Console.WriteLine($"       {C.Gray}$ {c.Cmd}{C.Reset}");
                     if (!string.IsNullOrEmpty(c.Dir))
-                        Console.WriteLine($"       {C.Gray}{c.Dir}{C.Reset}");
+                        Console.WriteLine($"         {C.Dim}dir: {c.Dir}{C.Reset}");
                 }
             }
             Console.WriteLine();

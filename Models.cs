@@ -8,7 +8,8 @@ record Command(
     [property: JsonPropertyName("group")] string? Group,
     [property: JsonPropertyName("dir")]   string? Dir,
     [property: JsonPropertyName("cmd")]   string Cmd,
-    [property: JsonPropertyName("shell")] string? Shell
+    [property: JsonPropertyName("shell")] string? Shell,
+    [property: JsonPropertyName("vars")]  Dictionary<string, string>? Vars = null
 );
 
 record Config(
@@ -27,8 +28,8 @@ record Alias(
     [property: JsonPropertyName("vars")]  Dictionary<string, Dictionary<string, string>>? Vars = null
 );
 
-// A single entry in a vars/*.tsv file: value + optional label
-record VarEntry(string Value, string? Label = null);
+// A single entry in a lists/*.tsv file: value + optional label
+record ListEntry(string Value, string? Label = null);
 
 // Represents a selectable item: either a Command or an Alias
 record RunItem(string Name, Command? Cmd, Alias? Alias, Dictionary<string, string>? VarMap)
@@ -52,5 +53,5 @@ static class C
     // Display columns used by box-drawing chars (1 = normal, 2 = East-Asian wide)
     public static int BoxCharCols = 1;
 
-    public static readonly Regex VarPattern = new Regex(@"\{(\w+)\}", RegexOptions.Compiled);
+    public static readonly Regex SlotPattern = new Regex(@"\{(\w+)\}", RegexOptions.Compiled);
 }

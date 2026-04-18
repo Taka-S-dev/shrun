@@ -3,56 +3,65 @@ using static Shrun.Tui;
 
 namespace Shrun;
 
-static class VarSystem
+static class ListSystem
 {
-    public static Dictionary<string, List<VarEntry>> LoadVarsFromDir(string varsDir)
+    public static Dictionary<string, List<ListEntry>> LoadListsFromDir(string listsDir)
     {
-        var result = new Dictionary<string, List<VarEntry>>();
-        if (!Directory.Exists(varsDir)) return result;
-        foreach (var file in Directory.GetFiles(varsDir, "*.tsv").OrderBy(f => f))
+        var result = new Dictionary<string, List<ListEntry>>();
+        if (!Directory.Exists(listsDir)) return result;
+        foreach (var file in Directory.GetFiles(listsDir, "*.tsv").OrderBy(f => f))
         {
-            var varName = Path.GetFileNameWithoutExtension(file);
-            var entries = File.ReadAllLines(file)
+            var listName = Path.GetFileNameWithoutExtension(file);
+            string rawText;
+            using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var sr = new StreamReader(fs))
+                rawText = sr.ReadToEnd();
+            var entries = rawText.Split(["\r\n", "\n"], StringSplitOptions.None)
                 .Where(l => !string.IsNullOrWhiteSpace(l))
                 .Select(l =>
                 {
                     var parts = l.Split('\t', 2);
                     var value = parts[0].Trim();
                     var label = parts.Length > 1 ? parts[1].Trim() : null;
-                    return new VarEntry(value, string.IsNullOrEmpty(label) ? null : label);
+                    return new ListEntry(value, string.IsNullOrEmpty(label) ? null : label);
                 })
                 .Where(e => !string.IsNullOrEmpty(e.Value))
                 .ToList();
-            if (entries.Count > 0) result[varName] = entries;
+            if (entries.Count > 0) result[listName] = entries;
         }
         return result;
     }
 
-    public static void SaveVar(string varsDir, string varName, List<VarEntry> entries)
+    public static void SaveList(string listsDir, string listName, List<ListEntry> entries)
     {
         try
         {
-            Directory.CreateDirectory(varsDir);
+            Directory.CreateDirectory(listsDir);
             var lines = entries.Select(e => string.IsNullOrEmpty(e.Label) ? e.Value : $"{e.Value}\t{e.Label}");
-            File.WriteAllLines(Path.Combine(varsDir, $"{varName}.tsv"), lines);
+            File.WriteAllLines(Path.Combine(listsDir, $"{listName}.tsv"), lines);
         }
-        catch (Exception ex) { Console.WriteLine($"\n  Failed to save var: {ex.Message}"); Pause(); }
+        catch (Exception ex) { Console.WriteLine($"\n  Failed to save list: {ex.Message}"); Pause(); }
     }
 
-    public static List<string> ExtractVarNames(Command cmd)
+    public static bool HasPlaceholders(Command cmd) =>
+        C.SlotPattern.IsMatch(cmd.Cmd) || C.SlotPattern.IsMatch(cmd.Dir ?? "");
+
+    // Returns unique slot names (for alias/backward-compat use)
+    public static List<string> ExtractAllSlotNames(Command cmd)
     {
         var names = new HashSet<string>();
-        foreach (Match m in C.VarPattern.Matches(cmd.Cmd))       names.Add(m.Groups[1].Value);
-        foreach (Match m in C.VarPattern.Matches(cmd.Dir ?? "")) names.Add(m.Groups[1].Value);
+        foreach (Match m in C.SlotPattern.Matches(cmd.Cmd))       names.Add(m.Groups[1].Value);
+        foreach (Match m in C.SlotPattern.Matches(cmd.Dir ?? "")) names.Add(m.Groups[1].Value);
         return names.ToList();
     }
 
-    public static Command ApplyVars(Command cmd, Dictionary<string, string> varMap)
+    // Apply a varName→value map to command text (used for workflow stored vars and aliases)
+    public static Command ApplyVarValues(Command cmd, Dictionary<string, string> varValues)
     {
-        if (varMap.Count == 0) return cmd;
+        if (varValues.Count == 0) return cmd;
         var resolvedCmd = cmd.Cmd;
         var resolvedDir = cmd.Dir;
-        foreach (var (k, v) in varMap)
+        foreach (var (k, v) in varValues)
         {
             resolvedCmd = resolvedCmd.Replace($"{{{k}}}", v);
             resolvedDir = resolvedDir?.Replace($"{{{k}}}", v);
@@ -60,22 +69,117 @@ static class VarSystem
         return cmd with { Cmd = resolvedCmd, Dir = resolvedDir };
     }
 
-    // Show TUI selector for a variable; returns chosen value or null (Esc)
-    public static string? PromptVar(string varName, List<VarEntry> entries,
-        List<string>? cmdList = null, int cmdIndex = -1, List<string?>? cmdNotes = null)
+    // Prompt for variable values defined in cmd.Vars; returns null if cancelled
+    public static Dictionary<string, string>? PromptVarValues(
+        Command cmd, Dictionary<string, List<ListEntry>> lists,
+        List<string>? contextNames = null, int contextIndex = -1, List<string?>? contextNotes = null)
+    {
+        var result = new Dictionary<string, string>();
+        foreach (var (varName, listName) in cmd.Vars ?? new())
+        {
+            var entries = lists.TryGetValue(listName, out var e) ? e : new List<ListEntry>();
+            var value = PromptList(varName, entries, contextNames, contextIndex, contextNotes, cmd, result);
+            if (value == null) return null;
+            result[varName] = value;
+        }
+        return result;
+    }
+
+    // Prompt for each remaining {listName} occurrence positionally; returns null if cancelled
+    public static Command? ResolveListSelections(
+        Command cmd, Dictionary<string, List<ListEntry>> lists,
+        List<string>? contextNames = null, int contextIndex = -1, List<string?>? contextNotes = null)
+    {
+        var cmdOccurrences = C.SlotPattern.Matches(cmd.Cmd).Select(m => m.Groups[1].Value).ToList();
+        var dirOccurrences = C.SlotPattern.Matches(cmd.Dir ?? "").Select(m => m.Groups[1].Value).ToList();
+
+        if (cmdOccurrences.Count == 0 && dirOccurrences.Count == 0) return cmd;
+
+        var cmdSelections = new List<string>();
+        var dirSelections = new List<string>();
+
+        foreach (var listName in cmdOccurrences)
+        {
+            var entries = lists.TryGetValue(listName, out var e) ? e : new List<ListEntry>();
+            var value = PromptList(listName, entries, contextNames, contextIndex, contextNotes, cmd);
+            if (value == null) return null;
+            cmdSelections.Add(value);
+        }
+        foreach (var listName in dirOccurrences)
+        {
+            var entries = lists.TryGetValue(listName, out var e) ? e : new List<ListEntry>();
+            var value = PromptList(listName, entries, contextNames, contextIndex, contextNotes, cmd);
+            if (value == null) return null;
+            dirSelections.Add(value);
+        }
+
+        int idx = 0;
+        var resolvedCmd = C.SlotPattern.Replace(cmd.Cmd, _ => cmdSelections[idx++]);
+        idx = 0;
+        var resolvedDir = cmd.Dir != null ? C.SlotPattern.Replace(cmd.Dir, _ => dirSelections[idx++]) : null;
+        return cmd with { Cmd = resolvedCmd, Dir = resolvedDir };
+    }
+
+    // Show TUI selector for a slot (variable or list); returns chosen value or null (Esc)
+    public static string? PromptList(string slotName, List<ListEntry> entries,
+        List<string>? contextNames = null, int contextIndex = -1, List<string?>? contextNotes = null,
+        Command? currentCmd = null, Dictionary<string, string>? resolvedValues = null)
     {
         int cursor = 0;
         string search = "";
 
-        void RenderCmdContext()
+        // Apply already-resolved values, then highlight the current slot
+        string Highlight(string text)
         {
-            for (int i = 0; i < cmdList!.Count; i++)
+            if (resolvedValues != null)
+                foreach (var (k, v) in resolvedValues)
+                    text = text.Replace($"{{{k}}}", v);
+            return C.SlotPattern.Replace(text, m =>
+                m.Groups[1].Value == slotName
+                    ? $"{C.Cyan}{m.Value}{C.Reset}"
+                    : m.Value);
+        }
+
+        // Only show the line(s) that contain the slot currently being selected
+        bool showCmd = currentCmd != null && !string.IsNullOrEmpty(currentCmd.Cmd) &&
+            C.SlotPattern.Matches(currentCmd.Cmd).Any(m => m.Groups[1].Value == slotName);
+        bool showDir = currentCmd != null && !string.IsNullOrEmpty(currentCmd.Dir) &&
+            C.SlotPattern.Matches(currentCmd.Dir ?? "").Any(m => m.Groups[1].Value == slotName);
+        // Fallback: show cmd if slot not found in either line
+        if (currentCmd != null && !showCmd && !showDir && !string.IsNullOrEmpty(currentCmd.Cmd))
+            showCmd = true;
+
+        int NoteLines(int i) =>
+            contextNotes != null && i < contextNotes.Count && !string.IsNullOrEmpty(contextNotes[i])
+                ? contextNotes[i]!.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length : 0;
+        int extraLines = (showCmd ? 1 : 0) + (showDir ? 1 : 0) +
+            (contextNames == null ? 0 : Enumerable.Range(0, contextNames.Count)
+                .Where(i => i != contextIndex).Sum(NoteLines));
+
+        void RenderContext()
+        {
+            for (int i = 0; i < contextNames!.Count; i++)
             {
-                var note = cmdNotes != null && i < cmdNotes.Count && cmdNotes[i] != null
-                    ? $"  {cmdNotes[i]}" : "";
-                Console.WriteLine(i == cmdIndex
-                    ? $"  {C.CursorBg} {i + 1,2}. {cmdList[i]}{note}{C.Reset}"
-                    : $"  {C.Gray}  {i + 1,2}. {cmdList[i]}{note}{C.Reset}");
+                Console.WriteLine(i == contextIndex
+                    ? $"  {C.CursorBg} {i + 1,2}. {contextNames[i]}{C.Reset}"
+                    : $"  {C.Gray}  {i + 1,2}. {contextNames[i]}{C.Reset}");
+
+                if (i == contextIndex && currentCmd != null)
+                {
+                    // Current: partially-resolved cmd/dir with current slot highlighted
+                    if (showCmd)
+                        Console.WriteLine($"       {C.Gray}$ {Highlight(currentCmd!.Cmd)}{C.Reset}");
+                    if (showDir)
+                        Console.WriteLine($"         {C.Gray}dir: {Highlight(currentCmd!.Dir!)}{C.Reset}");
+                }
+                else
+                {
+                    // Completed/pending: show resolved preview from note
+                    var noteText = contextNotes != null && i < contextNotes.Count ? contextNotes[i] : null;
+                    if (!string.IsNullOrEmpty(noteText))
+                        foreach (var line in noteText.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                            Console.WriteLine($"       {C.Gray}{line}{C.Reset}");
+                }
             }
             Console.WriteLine();
             Console.WriteLine(HLineLabel("Select value"));
@@ -96,15 +200,13 @@ static class VarSystem
             int labelCol = filtered.Any(e => e.Label != null)
                 ? filtered.Max(e => e.Value.Length) + 2 : 0;
 
-            Header($"Variable: {varName}");
+            Header($"Select: {slotName}");
+            if (contextNames != null) RenderContext();
 
-            if (cmdList != null) RenderCmdContext();
-
-            // Search field
             Console.WriteLine($"  {C.Cyan}/{C.Reset} {search}{C.Dim}_\x1b[0m");
             Console.WriteLine();
 
-            int contextLines = (cmdList != null ? cmdList.Count + 2 : 0) + 2;
+            int contextLines = (contextNames != null ? contextNames.Count + 2 + extraLines : 0) + 2;
             int viewHeight = Math.Max(1, Console.WindowHeight - 8 - contextLines);
             int viewStart  = Math.Max(0, Math.Min(cursor - viewHeight / 2, filtered.Count + 1 - viewHeight));
             var viewEnd    = Math.Min(viewStart + viewHeight, filtered.Count + 1);
@@ -148,10 +250,12 @@ static class VarSystem
                 case ConsoleKey.Enter:
                     if (cursor == filtered.Count)
                     {
-                        Header($"Variable: {varName}");
-                        if (cmdList != null) RenderCmdContext();
-                        Console.WriteLine("  Esc: cancel\n");
-                        return ReadInput($"  {varName} > ", search);
+                        Header($"Select: {slotName}");
+                        if (contextNames != null) RenderContext();
+                        Console.WriteLine("  Esc: back\n");
+                        var typed = ReadInput($"  {slotName} > ", search);
+                        if (typed == null) break; // Esc → back to list
+                        return typed;
                     }
                     return filtered[cursor].Value;
                 case ConsoleKey.Escape:
@@ -164,16 +268,16 @@ static class VarSystem
         }
     }
 
-    // TUI for editing var entries (value + optional label)
-    public static List<VarEntry> EditVarEntries(string varName, List<VarEntry> existing)
+    // TUI for editing list entries (value + optional label)
+    public static List<ListEntry> EditListEntries(string listName, List<ListEntry> existing)
     {
-        var entries = new List<VarEntry>(existing);
+        var entries = new List<ListEntry>(existing);
         int cursor = 0;
 
         while (true)
         {
-            var total = entries.Count + 1; // +1 for "+ Add value"
-            Header($"Var: {varName}");
+            var total = entries.Count + 1;
+            Header($"List: {listName}");
             Console.WriteLine($"  {C.Gray}Del: remove   Esc: done{C.Reset}\n");
 
             int labelCol = entries.Any(e => e.Label != null)
@@ -217,13 +321,13 @@ static class VarSystem
                 case ConsoleKey.Enter:
                     if (cursor == entries.Count)
                     {
-                        Header($"Add value: {varName}");
+                        Header($"Add value: {listName}");
                         Console.WriteLine("  Esc: cancel\n");
                         var val = ReadInput("  Value > ");
                         if (string.IsNullOrEmpty(val)) break;
                         Console.WriteLine($"  {C.Gray}Label (Enter to skip){C.Reset}");
                         var lbl = ReadOptionalInput("  Label > ");
-                        entries.Add(new VarEntry(val, string.IsNullOrEmpty(lbl) ? null : lbl));
+                        entries.Add(new ListEntry(val, string.IsNullOrEmpty(lbl) ? null : lbl));
                         cursor = entries.Count - 1;
                     }
                     break;
@@ -233,11 +337,11 @@ static class VarSystem
         }
     }
 
-    // Review and optionally re-edit collected workflow vars before saving
-    public static void ReviewWorkflowVars(
+    // Review and optionally re-edit variable values before saving a workflow or alias
+    public static void ReviewWorkflowValues(
         List<Command> cmdSelected,
         Dictionary<string, Dictionary<string, string>> workflowVars,
-        Dictionary<string, List<VarEntry>> vars)
+        Dictionary<string, List<ListEntry>> lists)
     {
         var rows = new List<(int cmdIdx, string cmdName, string varName)>();
         for (int ci = 0; ci < cmdSelected.Count; ci++)
@@ -252,27 +356,42 @@ static class VarSystem
         var cmdNames = cmdSelected.Select(c => c.Name).ToList();
         int labelWidth = rows.Max(r => $"{r.cmdIdx + 1}. {r.cmdName}".Length);
         int cursor = 0;
-        int btn = 0; // 0=Confirm, 1=Edit
+        int btn = 0;
         bool listMode = false;
 
         while (true)
         {
-            Header("Confirm vars");
-            Console.WriteLine($"  {C.Gray}Review the variables to be saved with this workflow.{C.Reset}\n");
+            Header("Confirm variables");
+            Console.WriteLine($"  {C.Gray}Review the variable values to be saved.{C.Reset}\n");
 
-            string? lastCmdName = null;
-            for (int i = 0; i < rows.Count; i++)
+            if (listMode)
             {
-                var (cmdIdx, cmdName, varName) = rows[i];
-                var value = workflowVars[cmdName][varName];
-                var prefix = cmdName != lastCmdName ? $"{cmdIdx + 1}. {cmdName}" : "";
-                lastCmdName = cmdName;
-                var paddedPrefix = prefix.PadRight(labelWidth);
-                var valueStr = $"{varName} = {value}";
-
-                Console.WriteLine(listMode && i == cursor
-                    ? $"  {C.Cyan}>{C.Reset} {paddedPrefix}  {C.White}{valueStr}{C.Reset}"
-                    : $"    {C.Gray}{paddedPrefix}  {valueStr}{C.Reset}");
+                string? lastCmdName = null;
+                for (int i = 0; i < rows.Count; i++)
+                {
+                    var (cmdIdx, cmdName, varName) = rows[i];
+                    var value = workflowVars[cmdName][varName];
+                    var prefix = cmdName != lastCmdName ? $"{cmdIdx + 1}. {cmdName}" : "";
+                    lastCmdName = cmdName;
+                    var paddedPrefix = prefix.PadRight(labelWidth);
+                    var valueStr = $"{varName} = {value}";
+                    Console.WriteLine(i == cursor
+                        ? $"  {C.Cyan}>{C.Reset} {paddedPrefix}  {C.White}{valueStr}{C.Reset}"
+                        : $"    {C.Gray}{paddedPrefix}  {valueStr}{C.Reset}");
+                }
+            }
+            else
+            {
+                for (int ci = 0; ci < cmdSelected.Count; ci++)
+                {
+                    var cmd = cmdSelected[ci];
+                    if (!workflowVars.TryGetValue(cmd.Name, out var cmdVars)) continue;
+                    var resolved = ApplyVarValues(cmd, cmdVars);
+                    Console.WriteLine($"  {C.Gray}  {ci + 1}. {cmd.Name}{C.Reset}");
+                    Console.WriteLine($"       {C.Gray}$ {resolved.Cmd}{C.Reset}");
+                    if (!string.IsNullOrEmpty(resolved.Dir))
+                        Console.WriteLine($"         {C.Dim}dir: {resolved.Dir}{C.Reset}");
+                }
             }
 
             Console.WriteLine();
@@ -302,86 +421,12 @@ static class VarSystem
                         cursor = (cursor + 1) % rows.Count; break;
                     case ConsoleKey.Spacebar:
                         var (selCmdIdx, selCmdName, selVarName) = rows[cursor];
-                        var entries = vars.TryGetValue(selVarName, out var ch) ? ch : new List<VarEntry>();
-                        var newValue = PromptVar(selVarName, entries, cmdNames, selCmdIdx);
+                        var selCmd = cmdSelected.FirstOrDefault(c => c.Name == selCmdName);
+                        var listName = selCmd?.Vars?.TryGetValue(selVarName, out var ln) == true ? ln : selVarName;
+                        var entries = lists.TryGetValue(listName, out var ch) ? ch : new List<ListEntry>();
+                        var newValue = PromptList(selVarName, entries, cmdNames, selCmdIdx, currentCmd: selCmd);
                         if (newValue != null)
                             workflowVars[selCmdName][selVarName] = newValue;
-                        break;
-                    case ConsoleKey.Enter:
-                    case ConsoleKey.Escape:
-                        listMode = false; break;
-                }
-            }
-            else
-            {
-                switch (key.Key)
-                {
-                    case ConsoleKey.Tab:
-                    case ConsoleKey.LeftArrow:
-                    case ConsoleKey.RightArrow:
-                        btn = 1 - btn; break;
-                    case ConsoleKey.Enter:
-                        if (btn == 0) return;
-                        listMode = true; cursor = 0; break;
-                    case ConsoleKey.Escape:
-                        return;
-                }
-            }
-        }
-    }
-
-    // Confirm vars screen for Run manually (flat varMap, no per-command grouping)
-    public static void ReviewRunVars(Dictionary<string, string> varMap, Dictionary<string, List<VarEntry>> vars)
-    {
-        var keys = varMap.Keys.ToList();
-        int cursor = 0;
-        int btn = 0; // 0=Confirm, 1=Edit
-        bool listMode = false;
-
-        while (true)
-        {
-            Header("Confirm vars");
-            Console.WriteLine($"  {C.Gray}Review the variables for this run.{C.Reset}\n");
-
-            for (int i = 0; i < keys.Count; i++)
-            {
-                var k = keys[i];
-                var valueStr = $"{k} = {varMap[k]}";
-                Console.WriteLine(listMode && i == cursor
-                    ? $"  {C.Cyan}>{C.Reset} {C.White}{valueStr}{C.Reset}"
-                    : $"  {C.Gray}  {valueStr}{C.Reset}");
-            }
-
-            Console.WriteLine();
-            Console.WriteLine(HLine());
-            Console.WriteLine();
-
-            var rc = !listMode && btn == 0 ? $"\x1b[92m{C.Bold}" : C.Gray;
-            var ec = !listMode && btn == 1 ? $"{C.White}{C.Bold}" : C.Gray;
-            Console.WriteLine($"  {rc}+-----------+{C.Reset}      {ec}+--------+{C.Reset}");
-            Console.WriteLine($"  {rc}|  Confirm  |{C.Reset}      {ec}|  Edit  |{C.Reset}");
-            Console.WriteLine($"  {rc}+-----------+{C.Reset}      {ec}+--------+{C.Reset}");
-
-            if (listMode)
-                Console.WriteLine($"\n  {C.Gray}↑↓ Space: edit   Enter: done{C.Reset}");
-            else
-                Console.WriteLine($"\n  {C.Gray}Tab: switch   Enter: confirm{C.Reset}");
-
-            var key = Console.ReadKey(true);
-
-            if (listMode)
-            {
-                switch (key.Key)
-                {
-                    case ConsoleKey.UpArrow:
-                        cursor = (cursor - 1 + keys.Count) % keys.Count; break;
-                    case ConsoleKey.DownArrow:
-                        cursor = (cursor + 1) % keys.Count; break;
-                    case ConsoleKey.Spacebar:
-                        var selKey = keys[cursor];
-                        var entries = vars.TryGetValue(selKey, out var ch) ? ch : new List<VarEntry>();
-                        var newValue = PromptVar(selKey, entries);
-                        if (newValue != null) varMap[selKey] = newValue;
                         break;
                     case ConsoleKey.Enter:
                     case ConsoleKey.Escape:

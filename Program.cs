@@ -2,7 +2,7 @@ using System.Text.Json;
 using Shrun;
 using static Shrun.Tui;
 using static Shrun.Selectors;
-using static Shrun.VarSystem;
+using static Shrun.ListSystem;
 using static Shrun.ConfigStore;
 using static Shrun.Runner;
 
@@ -35,17 +35,17 @@ var projectDir = projectDirs.Count == 1
 
 if (projectDir == null) return;
 
-var (config, workflows, lastWorkflow, workflowsPath, lastPath, aliases, aliasesPath, vars, varsDir) = LoadConfig(projectDir);
+var (config, workflows, lastWorkflow, workflowsPath, lastPath, aliases, aliasesPath, lists, listsDir) = LoadConfig(projectDir);
 if (config == null) return;
 
-var modes = new List<string> { "Run workflow", "Run manually", "Create workflow", "Edit workflow", "Delete workflow", "Manage aliases", "Manage vars", "Switch config", "Exit" };
+var modes = new List<string> { "Run workflow", "Run manually", "Create workflow", "Edit workflow", "Delete workflow", "Manage aliases", "Manage lists", "Switch config", "Exit" };
 
 try
 {
 
 while (true)
 {
-    // Reload config and vars on each iteration so selection screens always show latest
+    // Reload config and lists on each iteration so selection screens always show latest
     try
     {
         var reloadJson = Path.Combine(projectDir, "config.json");
@@ -55,7 +55,7 @@ while (true)
             : File.Exists(reloadTsv) ? ParseTsv(reloadTsv) : null;
         if (reloaded != null && reloaded.Commands.Count > 0) config = reloaded;
 
-        vars = LoadVarsFromDir(varsDir);
+        lists = LoadListsFromDir(listsDir);
     }
     catch (Exception ex)
     {
@@ -74,7 +74,7 @@ while (true)
         var newDir = SelectProjectDir(projectDirs);
         if (newDir == null) continue;
         projectDir = newDir;
-        (config, workflows, lastWorkflow, workflowsPath, lastPath, aliases, aliasesPath, vars, varsDir) = LoadConfig(projectDir);
+        (config, workflows, lastWorkflow, workflowsPath, lastPath, aliases, aliasesPath, lists, listsDir) = LoadConfig(projectDir);
         if (config == null) return;
         continue;
     }
@@ -155,22 +155,26 @@ while (true)
             for (int si = 0; si < steps.Count; si++)
             {
                 var cmd = steps[si];
-                var varNames = ExtractVarNames(cmd);
-                if (varNames.Count == 0) continue;
+                var slotNames = ExtractAllSlotNames(cmd);
+                if (slotNames.Count == 0) continue;
                 var cmdVars = new Dictionary<string, string>();
-                foreach (var varName in varNames)
+                foreach (var slotName in slotNames)
                 {
-                    var entries = vars.TryGetValue(varName, out var ch) ? ch : new List<VarEntry>();
-                    var value = PromptVar(varName, entries, stepNames, si, aliasCmdNotes);
+                    var listName = cmd.Vars?.TryGetValue(slotName, out var ln) == true ? ln : slotName;
+                    var entries = lists.TryGetValue(listName, out var ch) ? ch : [];
+                    var value = PromptList(slotName, entries, stepNames, si, aliasCmdNotes, cmd, cmdVars);
                     if (value == null) { aliasCancelled = true; break; }
-                    cmdVars[varName] = value;
-                    aliasCmdNotes[si] = string.Join(" ", cmdVars.Select(kv => $"{{{kv.Key}={kv.Value}}}"));
+                    cmdVars[slotName] = value;
+                    var partialAlias = ApplyVarValues(cmd, cmdVars);
+                    aliasCmdNotes[si] = !string.IsNullOrEmpty(partialAlias.Dir)
+                        ? $"{partialAlias.Cmd}  (dir: {partialAlias.Dir})"
+                        : partialAlias.Cmd;
                 }
                 if (aliasCancelled) break;
                 aliasVarMap[cmd.Name] = cmdVars;
             }
             if (aliasCancelled) continue;
-            if (aliasVarMap.Count > 0) ReviewWorkflowVars(steps, aliasVarMap, vars);
+            if (aliasVarMap.Count > 0) ReviewWorkflowValues(steps, aliasVarMap, lists);
 
             Header("Create alias");
             Console.WriteLine("  Esc: cancel\n");
@@ -249,99 +253,99 @@ while (true)
         continue;
     }
 
-    // --- Manage vars ---
-    if (mode == "Manage vars")
+    // --- Manage lists ---
+    if (mode == "Manage lists")
     {
-        var varModes = new List<string> { "Create var", "Edit var", "Delete var" };
-        var varMode = SingleSelectStr("Manage vars", varModes);
-        if (varMode == null) continue;
+        var listModes = new List<string> { "Create list", "Edit list", "Delete list" };
+        var listMode = SingleSelectStr("Manage lists", listModes);
+        if (listMode == null) continue;
 
-        if (varMode == "Create var")
+        if (listMode == "Create list")
         {
-            Header("Create var");
+            Header("Create list");
             Console.WriteLine("  Esc: cancel\n");
-            var varName = ReadInput("  Var name > ");
-            if (string.IsNullOrEmpty(varName)) continue;
+            var listName = ReadInput("  List name > ");
+            if (string.IsNullOrEmpty(listName)) continue;
 
-            if (vars.ContainsKey(varName))
+            if (lists.ContainsKey(listName))
             {
-                Console.Write($"  \"{varName}\" already exists. Overwrite? (y/n) > ");
+                Console.Write($"  \"{listName}\" already exists. Overwrite? (y/n) > ");
                 if (Console.ReadLine()?.Trim().ToLower() != "y") { Pause(); continue; }
             }
 
-            var entries = EditVarEntries(varName, new List<VarEntry>());
+            var entries = EditListEntries(listName, []);
             if (entries.Count > 0)
             {
-                Directory.CreateDirectory(varsDir);
-                SaveVar(varsDir, varName, entries);
-                vars[varName] = entries;
-                Header("Create var"); Console.WriteLine("  Saved."); Pause();
+                Directory.CreateDirectory(listsDir);
+                SaveList(listsDir, listName, entries);
+                lists[listName] = entries;
+                Header("Create list"); Console.WriteLine("  Saved."); Pause();
             }
             continue;
         }
 
-        if (varMode == "Edit var")
+        if (listMode == "Edit list")
         {
-            if (vars.Count == 0)
+            if (lists.Count == 0)
             {
-                Header("Edit var"); Console.WriteLine("  No vars found."); Pause(); continue;
+                Header("Edit list"); Console.WriteLine("  No lists found."); Pause(); continue;
             }
-            var varNames = vars.Keys.ToList();
-            var selectedVarName = SingleSelectStr("Edit var", varNames);
-            if (selectedVarName == null) continue;
+            var listNames = lists.Keys.ToList();
+            var selectedListName = SingleSelectStr("Edit list", listNames);
+            if (selectedListName == null) continue;
 
-            var editVarModes = new List<string> { "Rename", "Edit values" };
-            var editVarMode = SingleSelectStr($"Edit: {selectedVarName}", editVarModes);
-            if (editVarMode == null) continue;
+            var editListModes = new List<string> { "Rename", "Edit values" };
+            var editListMode = SingleSelectStr($"Edit: {selectedListName}", editListModes);
+            if (editListMode == null) continue;
 
-            if (editVarMode == "Rename")
+            if (editListMode == "Rename")
             {
-                Header($"Rename: {selectedVarName}");
+                Header($"Rename: {selectedListName}");
                 Console.WriteLine("  Esc: cancel\n");
                 var newName = ReadInput("  New name > ");
                 if (string.IsNullOrEmpty(newName)) continue;
-                if (vars.ContainsKey(newName))
+                if (lists.ContainsKey(newName))
                 {
                     Console.Write($"  \"{newName}\" already exists. Overwrite? (y/n) > ");
                     if (Console.ReadLine()?.Trim().ToLower() != "y") { Pause(); continue; }
-                    var oldFile = Path.Combine(varsDir, $"{newName}.tsv");
+                    var oldFile = Path.Combine(listsDir, $"{newName}.tsv");
                     File.Delete(oldFile);
-                    vars.Remove(newName);
+                    lists.Remove(newName);
                 }
-                var entries = vars[selectedVarName];
-                var srcFile = Path.Combine(varsDir, $"{selectedVarName}.tsv");
-                var dstFile = Path.Combine(varsDir, $"{newName}.tsv");
+                var entries = lists[selectedListName];
+                var srcFile = Path.Combine(listsDir, $"{selectedListName}.tsv");
+                var dstFile = Path.Combine(listsDir, $"{newName}.tsv");
                 try { File.Move(srcFile, dstFile); } catch (FileNotFoundException) { }
-                vars.Remove(selectedVarName);
-                vars[newName] = entries;
+                lists.Remove(selectedListName);
+                lists[newName] = entries;
             }
             else
             {
-                var newEntries = EditVarEntries(selectedVarName, vars[selectedVarName]);
-                SaveVar(varsDir, selectedVarName, newEntries);
-                vars[selectedVarName] = newEntries;
+                var newEntries = EditListEntries(selectedListName, lists[selectedListName]);
+                SaveList(listsDir, selectedListName, newEntries);
+                lists[selectedListName] = newEntries;
             }
 
-            Header("Edit var"); Console.WriteLine("  Saved."); Pause(); continue;
+            Header("Edit list"); Console.WriteLine("  Saved."); Pause(); continue;
         }
 
-        if (varMode == "Delete var")
+        if (listMode == "Delete list")
         {
-            if (vars.Count == 0)
+            if (lists.Count == 0)
             {
-                Header("Delete var"); Console.WriteLine("  No vars found."); Pause(); continue;
+                Header("Delete list"); Console.WriteLine("  No lists found."); Pause(); continue;
             }
-            var varNames = vars.Keys.ToList();
-            var toDeleteVars = MultiSelectGeneric("Delete var", varNames, v => v);
-            if (toDeleteVars.Count == 0) continue;
-            foreach (var v in toDeleteVars)
+            var listNames = lists.Keys.ToList();
+            var toDeleteLists = MultiSelectGeneric("Delete list", listNames, v => v);
+            if (toDeleteLists.Count == 0) continue;
+            foreach (var v in toDeleteLists)
             {
-                vars.Remove(v);
-                var f = Path.Combine(varsDir, $"{v}.tsv");
+                lists.Remove(v);
+                var f = Path.Combine(listsDir, $"{v}.tsv");
                 File.Delete(f);
             }
-            Header("Delete var");
-            Console.WriteLine($"  Deleted: {string.Join(", ", toDeleteVars)}");
+            Header("Delete list");
+            Console.WriteLine($"  Deleted: {string.Join(", ", toDeleteLists)}");
             Pause();
         }
         continue;
@@ -363,16 +367,16 @@ while (true)
         var workflow = SingleSelect("Run workflow", workflows, p => p.Name, initialCursor);
         if (workflow == null) continue;
 
+        // Apply all stored values — no prompts needed at run time
         selected = workflow.Commands
             .Select(name => config.Commands.FirstOrDefault(c => c.Name == name))
             .Where(c => c != null)
             .Select(c =>
             {
-                var cmdVars = workflow.Vars?.TryGetValue(c!.Name, out var v) == true ? v : null;
-                var resolved = cmdVars != null ? ApplyVars(c!, cmdVars) : c!;
+                var storedVars = workflow.Vars?.TryGetValue(c!.Name, out var v) == true ? v : null;
+                var resolved = storedVars != null ? ApplyVarValues(c!, storedVars) : c!;
                 return new RunItem(resolved.Name, resolved, null, null);
             }).ToList();
-
         lastWorkflow = workflow.Name;
         File.WriteAllText(lastPath, lastWorkflow);
     }
@@ -381,47 +385,77 @@ while (true)
         var rawSelected = MultiSelectWithAliases("Select commands", config.Commands, aliases);
         if (rawSelected.Count == 0) continue;
 
-        var varMap = new Dictionary<string, string>();
         bool cancelled = false;
         var itemNames = rawSelected.Select(i => i.Name).ToList();
-        for (int ri = 0; ri < rawSelected.Count; ri++)
-        {
-            if (cancelled) break;
-            var item = rawSelected[ri];
-            // Aliases with stored vars skip runtime prompting
-            var cmdsToCheck = item.IsAlias
-                ? (item.Alias!.Vars != null
-                    ? Enumerable.Empty<Command>()
-                    : item.Alias.Steps.Select(s => config.Commands.FirstOrDefault(c => c.Name == s)).Where(c => c != null).Select(c => c!))
-                : new[] { item.Cmd! }.AsEnumerable();
+        var itemNotes = new List<string?>(new string?[rawSelected.Count]);
+        var resolvedItems = new List<RunItem>();
 
-            foreach (var cmd in cmdsToCheck)
+        for (int ri = 0; ri < rawSelected.Count && !cancelled; ri++)
+        {
+            var item = rawSelected[ri];
+
+            if (item.IsAlias)
             {
-                foreach (var varName in ExtractVarNames(cmd))
+                if (item.Alias!.Vars != null)
                 {
-                    if (varMap.ContainsKey(varName)) continue;
-                    var entries = vars.TryGetValue(varName, out var ch) ? ch : new List<VarEntry>();
-                    var value = PromptVar(varName, entries, itemNames, ri);
-                    if (value == null) { cancelled = true; break; }
-                    varMap[varName] = value;
+                    // Stored vars — no prompting needed
+                    resolvedItems.Add(item);
                 }
-                if (cancelled) break;
+                else
+                {
+                    // Prompt for all slots in each alias step
+                    var aliasVarMap = new Dictionary<string, string>();
+                    var stepCmds = item.Alias.Steps
+                        .Select(s => config.Commands.FirstOrDefault(c => c.Name == s))
+                        .Where(c => c != null).Select(c => c!).ToList();
+
+                    foreach (var stepCmd in stepCmds)
+                    {
+                        foreach (var slotName in ExtractAllSlotNames(stepCmd))
+                        {
+                            if (aliasVarMap.ContainsKey(slotName)) continue;
+                            var listName = stepCmd.Vars?.TryGetValue(slotName, out var ln) == true ? ln : slotName;
+                            var entries = lists.TryGetValue(listName, out var ch) ? ch : [];
+                            var value = PromptList(slotName, entries, itemNames, ri, itemNotes, stepCmd);
+                            if (value == null) { cancelled = true; break; }
+                            aliasVarMap[slotName] = value;
+                        }
+                        if (cancelled) break;
+                    }
+                    if (!cancelled)
+                        resolvedItems.Add(new RunItem(item.Name, null, item.Alias, aliasVarMap.Count > 0 ? aliasVarMap : null));
+                }
+            }
+            else
+            {
+                var cmd = item.Cmd!;
+
+                // Step 1: Variables defined in cmd.Vars — prompted once, reused everywhere
+                var varValues = PromptVarValues(cmd, lists, itemNames, ri, itemNotes);
+                if (varValues == null) { cancelled = true; break; }
+
+                if (varValues.Count > 0)
+                    itemNotes[ri] = string.Join(" ", varValues.Select(kv => $"{{{kv.Key}={kv.Value}}}"));
+
+                var cmdWithVars = ApplyVarValues(cmd, varValues);
+
+                // Step 2: List selections — each {listName} occurrence prompted independently
+                var resolved = ResolveListSelections(cmdWithVars, lists, itemNames, ri, itemNotes);
+                if (resolved == null) { cancelled = true; break; }
+
+                resolvedItems.Add(new RunItem(item.Name, resolved, null, null));
             }
         }
-        if (cancelled) continue;
-        if (varMap.Count > 0) ReviewRunVars(varMap, vars);
 
-        selected = rawSelected.Select(item =>
-            item.IsAlias
-                ? new RunItem(item.Name, null, item.Alias, varMap.Count > 0 ? varMap : null)
-                : new RunItem(item.Name, ApplyVars(item.Cmd!, varMap), null, null)
-        ).ToList();
+        if (cancelled) continue;
+        selected = resolvedItems;
     }
     else // Create workflow
     {
         var cmdSelected = MultiSelect("Select commands", config.Commands);
         if (cmdSelected.Count == 0) continue;
 
+        // Prompt for all unique placeholders; use cmd.Vars to determine which list to use
         var workflowVars = new Dictionary<string, Dictionary<string, string>>();
         bool cancelled = false;
         var cmdNames = cmdSelected.Select(c => c.Name).ToList();
@@ -429,22 +463,27 @@ while (true)
         for (int ci = 0; ci < cmdSelected.Count; ci++)
         {
             var cmd = cmdSelected[ci];
-            var varNames = ExtractVarNames(cmd);
-            if (varNames.Count == 0) continue;
+            var slotNames = ExtractAllSlotNames(cmd);
+            if (slotNames.Count == 0) continue;
+
             var cmdVars = new Dictionary<string, string>();
-            foreach (var varName in varNames)
+            foreach (var slotName in slotNames)
             {
-                var entries = vars.TryGetValue(varName, out var ch) ? ch : new List<VarEntry>();
-                var value = PromptVar(varName, entries, cmdNames, ci, cmdNotes);
+                var listName = cmd.Vars?.TryGetValue(slotName, out var ln) == true ? ln : slotName;
+                var entries = lists.TryGetValue(listName, out var ch) ? ch : [];
+                var value = PromptList(slotName, entries, cmdNames, ci, cmdNotes, cmd, cmdVars);
                 if (value == null) { cancelled = true; break; }
-                cmdVars[varName] = value;
-                cmdNotes[ci] = string.Join(" ", cmdVars.Select(kv => $"{{{kv.Key}={kv.Value}}}"));
+                cmdVars[slotName] = value;
+                var partial = ApplyVarValues(cmd, cmdVars);
+                cmdNotes[ci] = !string.IsNullOrEmpty(partial.Dir)
+                    ? $"{partial.Cmd}  (dir: {partial.Dir})"
+                    : partial.Cmd;
             }
             if (cancelled) break;
             workflowVars[cmd.Name] = cmdVars;
         }
         if (cancelled) continue;
-        if (workflowVars.Count > 0) ReviewWorkflowVars(cmdSelected, workflowVars, vars);
+        if (workflowVars.Count > 0) ReviewWorkflowValues(cmdSelected, workflowVars, lists);
 
         Header("Create workflow");
         Console.WriteLine("  Esc: cancel\n");
@@ -523,7 +562,7 @@ while (true)
                 {
                     var stepVars = item.Alias.Vars?.TryGetValue(stepName, out var sv) == true
                         ? sv : (item.VarMap ?? new());
-                    toRun.Add(ApplyVars(cmd, stepVars));
+                    toRun.Add(ApplyVarValues(cmd, stepVars));
                 }
             }
         }
@@ -533,26 +572,74 @@ while (true)
         }
     }
 
-    Header("Running");
-    var success = true;
-    int completed = 0;
-    for (int i = 0; i < toRun.Count; i++)
+    int startFrom = 0;
+    int retryCount = 0;
+    bool success = false;
+    while (true)
     {
-        var cmd = toRun[i];
-        Console.WriteLine($"  [{i + 1}/{toRun.Count}] {C.White}{cmd.Name}{C.Reset}");
-        Console.WriteLine($"  {C.Gray}> {cmd.Cmd}{C.Reset}");
-        if (!string.IsNullOrEmpty(cmd.Dir))
-            Console.WriteLine($"  {C.Gray}  {cmd.Dir}{C.Reset}");
-        Console.WriteLine();
-        if (!RunCommand(cmd.Cmd, cmd.Dir, cmd.Shell))
+        Header(retryCount == 0 ? "Running" : $"Running  {C.Gray}(retry {retryCount}){C.Reset}");
+        success = true;
+        int completed = 0;
+        int failedAt = -1;
+        for (int i = startFrom; i < toRun.Count; i++)
         {
-            Console.WriteLine($"  {C.Gray}Error: {cmd.Name} failed. Aborting.{C.Reset}");
-            success = false;
-            break;
+            var cmd = toRun[i];
+            Console.WriteLine($"  [{i + 1}/{toRun.Count}] {C.White}{cmd.Name}{C.Reset}");
+            Console.WriteLine($"       {C.Gray}$ {cmd.Cmd}{C.Reset}");
+            if (!string.IsNullOrEmpty(cmd.Dir))
+                Console.WriteLine($"         {C.Dim}dir: {cmd.Dir}{C.Reset}");
+            Console.WriteLine();
+            if (!RunCommand(cmd.Cmd, cmd.Dir, cmd.Shell))
+            {
+                Console.WriteLine($"  {C.Gray}Error: {cmd.Name} failed.{C.Reset}");
+                success = false;
+                failedAt = i;
+                break;
+            }
+            completed++;
+            Console.WriteLine(ProgressBar(startFrom + completed, toRun.Count));
+            Console.WriteLine();
         }
-        completed++;
-        Console.WriteLine(ProgressBar(completed, toRun.Count));
+
+        if (success) break;
+
         Console.WriteLine();
+        var remaining = string.Join(" → ", toRun.Skip(failedAt).Select(c => c.Name));
+        var retryOptions = new List<string>
+        {
+            $"Retry from step {failedAt + 1}  ({remaining})",
+            "Retry all",
+            "Abort"
+        };
+
+        // Inline selector — no Console.Clear() so error output stays visible
+        int retryCursor = 0;
+        foreach (var opt in retryOptions)
+            Console.WriteLine($"    {opt}");
+        int optTop = Console.CursorTop - retryOptions.Count;
+        Console.WriteLine();
+        PanelHint("↑↓ Enter Esc");
+
+        while (true)
+        {
+            for (int r = 0; r < retryOptions.Count; r++)
+            {
+                Console.SetCursorPosition(0, optTop + r);
+                Console.Write(r == retryCursor
+                    ? $"  {C.Cyan}>{C.Reset} {retryOptions[r]}          "
+                    : $"    {retryOptions[r]}          ");
+            }
+            var rk = Console.ReadKey(true);
+            if (rk.Key == ConsoleKey.UpArrow)        retryCursor = (retryCursor - 1 + retryOptions.Count) % retryOptions.Count;
+            else if (rk.Key == ConsoleKey.DownArrow) retryCursor = (retryCursor + 1) % retryOptions.Count;
+            else if (rk.Key == ConsoleKey.Enter)     break;
+            else if (rk.Key == ConsoleKey.Escape)    { retryCursor = 2; break; }
+        }
+        Console.WriteLine();
+
+        if (retryCursor == 0) { startFrom = failedAt; retryCount++; }
+        else if (retryCursor == 1) { startFrom = 0; retryCount++; }
+        else break;
     }
 
     Console.WriteLine(success ? $"  {C.Green}Done!{C.Reset}" : $"  {C.Gray}Aborted.{C.Reset}");

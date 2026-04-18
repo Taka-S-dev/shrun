@@ -1,10 +1,9 @@
 {
   "commands": [
-    { "name": "task-a1", "group": "prepare", "dir": "Z:\\task-a1", "cmd": "echo task-a1 done" },
-    { "name": "task-a2", "group": "prepare", "dir": "Z:\\task-a2", "cmd": "echo task-a2 done" },
-    { "name": "task-b1", "group": "process", "dir": "Z:\\task-b1", "cmd": "echo task-b1 done" },
-    { "name": "task-b2", "group": "process", "dir": "Z:\\task-b2", "cmd": "echo task-b2 done" },
-    { "name": "task-c1", "group": "deploy",  "dir": "",            "cmd": "echo task-c1 done" },
-    { "name": "task-c2", "group": "deploy",  "dir": "",            "cmd": "echo task-c2 done" }
+    { "name": "build",  "group": "make",   "dir": "{projDir}", "cmd": "echo building {projCmd}", "vars": { "projDir": "project", "projCmd": "project" } },
+    { "name": "test",   "group": "make",   "dir": "{project}", "cmd": "echo testing {project}" },
+    { "name": "clean",  "group": "make",   "dir": "{project}", "cmd": "echo cleaning {project}" },
+    { "name": "deploy", "group": "deploy", "dir": "",          "cmd": "echo deploying {env}" },
+    { "name": "restart","group": "deploy", "dir": "",          "cmd": "echo restarting {env}" }
   ]
 }
