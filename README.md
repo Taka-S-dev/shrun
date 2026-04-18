@@ -32,8 +32,8 @@ shrun/
         ├── config.json # Command definitions (JSON)
         ├── config.tsv  # Command definitions (TSV, alternative to JSON)
         ├── lists/      # Selection lists (one .tsv per list)
-        │   ├── project.tsv
-        │   └── env.tsv
+        │   ├── project.tsv  # Sample list for {project}, {projDir}, {projCmd}
+        │   └── env.tsv      # Sample list for {env}
         ├── workflows.json  # Saved workflows (auto-generated, not committed)
         └── aliases.json    # Saved aliases (auto-generated, not committed)
 ```

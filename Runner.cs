@@ -4,6 +4,17 @@ namespace Shrun;
 
 static class Runner
 {
+    private static Process? _current;
+
+    static Runner()
+    {
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true; // prevent host process from being killed immediately
+            _current?.Kill(entireProcessTree: true);
+        };
+    }
+
     public static bool RunCommand(string cmd, string? workDir, string? shell = null)
     {
         try
@@ -19,7 +30,9 @@ static class Runner
                 psi.WorkingDirectory = workDir;
 
             using var proc = Process.Start(psi)!;
+            _current = proc;
             proc.WaitForExit();
+            _current = null;
             return proc.ExitCode == 0;
         }
         catch (Exception ex)

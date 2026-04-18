@@ -176,19 +176,22 @@ while (true)
             if (aliasCancelled) continue;
             if (aliasVarMap.Count > 0) ReviewWorkflowValues(steps, aliasVarMap, lists);
 
-            Header("Create alias");
-            Console.WriteLine("  Esc: cancel\n");
-            var name = ReadInput("  Alias name > ");
-            if (!string.IsNullOrEmpty(name))
+            string? aliasName = null;
+            while (true)
             {
-                var existing = aliases.FirstOrDefault(a => a.Name == name);
-                if (existing != null)
-                {
-                    Console.Write($"  \"{name}\" already exists. Overwrite? (y/n) > ");
-                    if (Console.ReadLine()?.Trim().ToLower() != "y") { Pause(); continue; }
-                    aliases.Remove(existing);
-                }
-                aliases.Add(new Alias(name, steps.Select(c => c.Name).ToList(),
+                Header("Create alias");
+                Console.WriteLine("  Esc: cancel\n");
+                aliasName = ReadInput("  Alias name > ");
+                if (string.IsNullOrEmpty(aliasName)) { aliasName = null; break; }
+                var existing = aliases.FirstOrDefault(a => a.Name == aliasName);
+                if (existing == null) break;
+                Console.Write($"  \"{aliasName}\" already exists. Overwrite? (y/n) > ");
+                if (Console.ReadLine()?.Trim().ToLower() == "y") { aliases.Remove(existing); break; }
+                // n or Enter → ask for a different name
+            }
+            if (aliasName != null)
+            {
+                aliases.Add(new Alias(aliasName, steps.Select(c => c.Name).ToList(),
                     aliasVarMap.Count > 0 ? aliasVarMap : null));
                 SaveAliases(aliasesPath, aliases);
                 Console.WriteLine("  Saved.");
@@ -485,18 +488,21 @@ while (true)
         if (cancelled) continue;
         if (workflowVars.Count > 0) ReviewWorkflowValues(cmdSelected, workflowVars, lists);
 
-        Header("Create workflow");
-        Console.WriteLine("  Esc: cancel\n");
-        var name = ReadInput("  Workflow name > ");
-        if (!string.IsNullOrEmpty(name))
+        string? name = null;
+        while (true)
         {
+            Header("Create workflow");
+            Console.WriteLine("  Esc: cancel\n");
+            name = ReadInput("  Workflow name > ");
+            if (string.IsNullOrEmpty(name)) { name = null; break; }
             var existing = workflows.FirstOrDefault(p => p.Name == name);
-            if (existing != null)
-            {
-                Console.Write($"  \"{name}\" already exists. Overwrite? (y/n) > ");
-                if (Console.ReadLine()?.Trim().ToLower() != "y") { Pause(); continue; }
-                workflows.Remove(existing);
-            }
+            if (existing == null) break;
+            Console.Write($"  \"{name}\" already exists. Overwrite? (y/n) > ");
+            if (Console.ReadLine()?.Trim().ToLower() == "y") { workflows.Remove(existing); break; }
+            // n or Enter → ask for a different name
+        }
+        if (name != null)
+        {
             workflows.Add(new Workflow(name, cmdSelected.Select(c => c.Name).ToList(),
                 workflowVars.Count > 0 ? workflowVars : null));
             SaveWorkflows(workflowsPath, workflows);
@@ -570,6 +576,24 @@ while (true)
         {
             toRun.Add(item.Cmd!);
         }
+    }
+
+    // --- Validate: no unresolved placeholders ---
+    var unresolved = toRun
+        .Where(c => C.SlotPattern.IsMatch(c.Cmd) || C.SlotPattern.IsMatch(c.Dir ?? ""))
+        .Select(c =>
+        {
+            var slots = C.SlotPattern.Matches(c.Cmd).Concat(C.SlotPattern.Matches(c.Dir ?? ""))
+                .Select(m => $"{{{m.Groups[1].Value}}}").Distinct();
+            return $"{c.Name}: {string.Join(", ", slots)}";
+        }).ToList();
+    if (unresolved.Count > 0)
+    {
+        Header("Error");
+        Console.WriteLine("  Unresolved placeholders found:\n");
+        foreach (var u in unresolved) Console.WriteLine($"    {u}");
+        Console.WriteLine("\n  All placeholders must be resolved before running.");
+        Pause(); continue;
     }
 
     int startFrom = 0;

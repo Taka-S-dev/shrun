@@ -30,10 +30,20 @@ static class ConfigStore
         }
 
         Config? config = null;
-        if (File.Exists(jsonPath))
-            config = JsonSerializer.Deserialize<Config>(File.ReadAllText(jsonPath));
-        else if (File.Exists(tsvPath))
-            config = ParseTsv(tsvPath);
+        try
+        {
+            if (File.Exists(jsonPath))
+                config = JsonSerializer.Deserialize<Config>(File.ReadAllText(jsonPath));
+            else if (File.Exists(tsvPath))
+                config = ParseTsv(tsvPath);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to parse config: {ex.Message}");
+            Console.WriteLine($"  File: {(File.Exists(jsonPath) ? jsonPath : tsvPath)}");
+            Pause();
+            return (null, [], null, "", "", [], "", [], "");
+        }
 
         if (config == null || config.Commands.Count == 0)
         {
@@ -42,13 +52,17 @@ static class ConfigStore
             return (null, [], null, "", "", [], "", [], "");
         }
 
-        var workflows = File.Exists(workflowsPath)
+        List<Workflow> workflows = [];
+        try { workflows = File.Exists(workflowsPath)
             ? JsonSerializer.Deserialize<List<Workflow>>(File.ReadAllText(workflowsPath)) ?? []
-            : [];
+            : []; }
+        catch { Console.WriteLine($"  Warning: Could not parse workflows.json — starting fresh."); }
 
-        var aliases = File.Exists(aliasesPath)
+        List<Alias> aliases = [];
+        try { aliases = File.Exists(aliasesPath)
             ? JsonSerializer.Deserialize<List<Alias>>(File.ReadAllText(aliasesPath)) ?? []
-            : [];
+            : []; }
+        catch { Console.WriteLine($"  Warning: Could not parse aliases.json — starting fresh."); }
 
         var lists = LoadListsFromDir(listsDir);
 
@@ -135,15 +149,25 @@ static class ConfigStore
         return new Config(commands);
     }
 
-    public static void SaveWorkflows(string path, List<Workflow> workflows)
-    {
-        try { File.WriteAllText(path, JsonSerializer.Serialize(workflows, JsonOpts)); }
-        catch (Exception ex) { Console.WriteLine($"\n  Failed to save workflows: {ex.Message}"); Pause(); }
-    }
+    public static void SaveWorkflows(string path, List<Workflow> workflows) =>
+        AtomicWrite(path, JsonSerializer.Serialize(workflows, JsonOpts), "workflows");
 
-    public static void SaveAliases(string path, List<Alias> aliases)
+    public static void SaveAliases(string path, List<Alias> aliases) =>
+        AtomicWrite(path, JsonSerializer.Serialize(aliases, JsonOpts), "aliases");
+
+    private static void AtomicWrite(string path, string content, string label)
     {
-        try { File.WriteAllText(path, JsonSerializer.Serialize(aliases, JsonOpts)); }
-        catch (Exception ex) { Console.WriteLine($"\n  Failed to save aliases: {ex.Message}"); Pause(); }
+        var tmp = path + ".tmp";
+        try
+        {
+            File.WriteAllText(tmp, content);
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"\n  Failed to save {label}: {ex.Message}");
+            try { File.Delete(tmp); } catch { }
+            Pause();
+        }
     }
 }
