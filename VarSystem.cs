@@ -85,38 +85,28 @@ static class ListSystem
         return result;
     }
 
-    // Prompt for each remaining {listName} occurrence positionally; returns null if cancelled
+    // Prompt for each remaining {slotName} — once per unique name, applied to all occurrences
     public static Command? ResolveListSelections(
         Command cmd, Dictionary<string, List<ListEntry>> lists,
         List<string>? contextNames = null, int contextIndex = -1, List<string?>? contextNotes = null)
     {
-        var cmdOccurrences = C.SlotPattern.Matches(cmd.Cmd).Select(m => m.Groups[1].Value).ToList();
-        var dirOccurrences = C.SlotPattern.Matches(cmd.Dir ?? "").Select(m => m.Groups[1].Value).ToList();
+        var allSlotNames = C.SlotPattern.Matches(cmd.Cmd).Select(m => m.Groups[1].Value)
+            .Concat(C.SlotPattern.Matches(cmd.Dir ?? "").Select(m => m.Groups[1].Value))
+            .Distinct().ToList();
 
-        if (cmdOccurrences.Count == 0 && dirOccurrences.Count == 0) return cmd;
+        if (allSlotNames.Count == 0) return cmd;
 
-        var cmdSelections = new List<string>();
-        var dirSelections = new List<string>();
-
-        foreach (var listName in cmdOccurrences)
+        var selections = new Dictionary<string, string>();
+        foreach (var slotName in allSlotNames)
         {
-            var entries = lists.TryGetValue(listName, out var e) ? e : new List<ListEntry>();
-            var value = PromptList(listName, entries, contextNames, contextIndex, contextNotes, cmd);
+            var entries = lists.TryGetValue(slotName, out var e) ? e : new List<ListEntry>();
+            var value = PromptList(slotName, entries, contextNames, contextIndex, contextNotes, cmd, selections);
             if (value == null) return null;
-            cmdSelections.Add(value);
-        }
-        foreach (var listName in dirOccurrences)
-        {
-            var entries = lists.TryGetValue(listName, out var e) ? e : new List<ListEntry>();
-            var value = PromptList(listName, entries, contextNames, contextIndex, contextNotes, cmd);
-            if (value == null) return null;
-            dirSelections.Add(value);
+            selections[slotName] = value;
         }
 
-        int idx = 0;
-        var resolvedCmd = C.SlotPattern.Replace(cmd.Cmd, _ => cmdSelections[idx++]);
-        idx = 0;
-        var resolvedDir = cmd.Dir != null ? C.SlotPattern.Replace(cmd.Dir, _ => dirSelections[idx++]) : null;
+        var resolvedCmd = C.SlotPattern.Replace(cmd.Cmd, m => selections[m.Groups[1].Value]);
+        var resolvedDir = cmd.Dir != null ? C.SlotPattern.Replace(cmd.Dir, m => selections[m.Groups[1].Value]) : null;
         return cmd with { Cmd = resolvedCmd, Dir = resolvedDir };
     }
 

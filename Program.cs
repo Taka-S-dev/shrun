@@ -447,6 +447,11 @@ while (true)
                 var resolved = ResolveListSelections(cmdWithVars, lists, itemNames, ri, itemNotes);
                 if (resolved == null) { cancelled = true; break; }
 
+                if (itemNotes[ri] == null)
+                    itemNotes[ri] = !string.IsNullOrEmpty(resolved.Dir)
+                        ? $"$ {resolved.Cmd}  (dir: {resolved.Dir})"
+                        : $"$ {resolved.Cmd}";
+
                 resolvedItems.Add(new RunItem(item.Name, resolved, null, null));
             }
         }
